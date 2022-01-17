@@ -1,10 +1,10 @@
+use crate::config::{BuildConfiguration, CPPStandard, CStandard, Language, OptimizationLevel};
 use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
-use crate::config::{BuildConfiguration, CPPStandard, CStandard, Language, OptimizationLevel};
 
-pub(crate) fn build() -> Result<(), Box<dyn Error>>{
+pub(crate) fn build() -> Result<(), Box<dyn Error>> {
     let build_content = fs::read_to_string("ez.toml")?;
     let build = toml::from_str::<BuildConfiguration>(&build_content)?;
 
@@ -23,50 +23,62 @@ pub(crate) fn build() -> Result<(), Box<dyn Error>>{
                     }
                 }
 
-                command.arg(&format!("-x{}", match build.project.language {
-                    Language::C => "c",
-                    Language::CPP => "c++",
-                }));
+                command.arg(&format!(
+                    "-x{}",
+                    match build.project.language {
+                        Language::C => "c",
+                        Language::CPP => "c++",
+                    }
+                ));
 
                 match build.project.language {
                     Language::C => {
                         if let Some(ref c) = build.c {
                             if let Some(ref standard) = c.standard {
-                                command.arg(&format!("-std={}", match standard {
-                                    CStandard::EightyNine => "c89",
-                                    CStandard::NinetyNine => "c99",
-                                    CStandard::Eleven => "c11",
-                                    CStandard::Seventeen => "c17",
-                                }));
+                                command.arg(&format!(
+                                    "-std={}",
+                                    match standard {
+                                        CStandard::EightyNine => "c89",
+                                        CStandard::NinetyNine => "c99",
+                                        CStandard::Eleven => "c11",
+                                        CStandard::Seventeen => "c17",
+                                    }
+                                ));
                             }
                         }
-                    },
+                    }
                     Language::CPP => {
                         if let Some(ref cpp) = build.cpp {
                             if let Some(ref standard) = cpp.standard {
-                                command.arg(&format!("-std={}", match standard {
-                                    CPPStandard::NinetyEight => "c++98",
-                                    CPPStandard::Three => "c++3",
-                                    CPPStandard::Eleven => "c++11",
-                                    CPPStandard::Fourteen => "c++14",
-                                    CPPStandard::Seventeen => "c++17",
-                                    CPPStandard::Twenty => "c++20",
-                                }));
+                                command.arg(&format!(
+                                    "-std={}",
+                                    match standard {
+                                        CPPStandard::NinetyEight => "c++98",
+                                        CPPStandard::Three => "c++3",
+                                        CPPStandard::Eleven => "c++11",
+                                        CPPStandard::Fourteen => "c++14",
+                                        CPPStandard::Seventeen => "c++17",
+                                        CPPStandard::Twenty => "c++20",
+                                    }
+                                ));
                             }
                         }
-                    },
+                    }
                 }
 
                 if let Some(ref optimization) = build.project.optimization {
-                    command.arg(&format!("-O{}", match optimization {
-                        OptimizationLevel::Zero => "0",
-                        OptimizationLevel::One => "1",
-                        OptimizationLevel::Two => "2",
-                        OptimizationLevel::Three => "3",
-                        OptimizationLevel::Four => "fast",
-                        OptimizationLevel::Size => "s",
-                        OptimizationLevel::Debug => "g",
-                    }));
+                    command.arg(&format!(
+                        "-O{}",
+                        match optimization {
+                            OptimizationLevel::Zero => "0",
+                            OptimizationLevel::One => "1",
+                            OptimizationLevel::Two => "2",
+                            OptimizationLevel::Three => "3",
+                            OptimizationLevel::Four => "fast",
+                            OptimizationLevel::Size => "s",
+                            OptimizationLevel::Debug => "g",
+                        }
+                    ));
                 }
 
                 if build.project.enable_all_warnings.unwrap_or(false) {
@@ -79,7 +91,10 @@ pub(crate) fn build() -> Result<(), Box<dyn Error>>{
                 }
 
                 command.arg(source);
-                command.arg(&format!("-o{}", PathBuf::from(source).with_extension("o").to_str().unwrap()));
+                command.arg(&format!(
+                    "-o{}",
+                    PathBuf::from(source).with_extension("o").to_str().unwrap()
+                ));
 
                 if let Some(ref gcc) = build.gcc {
                     if let Some(ref additional_post_arguments) = gcc.additional_post_arguments {

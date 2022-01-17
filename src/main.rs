@@ -1,8 +1,8 @@
 mod commands;
 mod config;
 
-use std::error::Error;
 use clap::{App, SubCommand};
+use std::error::Error;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let matches = App::new("ez")

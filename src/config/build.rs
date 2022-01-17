@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::config::{CConfiguration, CPPConfiguration, GCCConfiguration, ProjectConfiguration};
+use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
