@@ -1,19 +1,25 @@
-use crate::config::{BuildConfiguration, CPPStandard, CStandard, Language, OptimizationLevel};
+use crate::config::{
+    BuildConfiguration, CPPStandard, CStandard, EzConfiguration, Language, OptimizationLevel,
+};
+use eyre::eyre;
 use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-pub(crate) fn build() -> Result<(), Box<dyn Error>> {
+pub(crate) fn build(ez_configuration: &EzConfiguration) -> Result<(), Box<dyn Error>> {
     let build_content = fs::read_to_string("ez.toml")?;
     let build = toml::from_str::<BuildConfiguration>(&build_content)?;
 
     if let Some(ref sources) = build.project.sources {
+        let gcc_location =
+            locate_gcc(ez_configuration).ok_or_else(|| eyre!("Failed to locate GCC"))?;
+
         if !sources.is_empty() {
             for source in sources {
                 println!("Compiling {} in {}", source, build.project.name);
 
-                let mut command = Command::new("/bin/gcc");
+                let mut command = Command::new(&gcc_location);
 
                 if let Some(ref gcc) = build.gcc {
                     if let Some(ref additional_pre_arguments) = gcc.additional_pre_arguments {
@@ -118,7 +124,7 @@ pub(crate) fn build() -> Result<(), Box<dyn Error>> {
 
             println!("Linking {}", build.project.name);
 
-            let output = Command::new("/bin/gcc")
+            let output = Command::new(&gcc_location)
                 .arg(&sources.join(" "))
                 .arg(&format!("-o{}", build.project.name))
                 .output()?;
@@ -131,4 +137,18 @@ pub(crate) fn build() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}
+
+fn locate_gcc(ez_configuration: &EzConfiguration) -> Option<String> {
+    if let Some(ref gcc_location) = ez_configuration.gcc_location {
+        Some(gcc_location.clone())
+    } else {
+        if cfg!(target_os = "windows") {
+            Some(which::which("gcc.exe").ok()?.to_string_lossy().into_owned())
+        } else if cfg!(target_os = "macos") || cfg!(target_os = "linux") {
+            Some(which::which("gcc").ok()?.to_string_lossy().into_owned())
+        } else {
+            None
+        }
+    }
 }
