@@ -5,7 +5,7 @@ use std::process::Command;
 use crate::config::{BuildConfiguration, CPPStandard, CStandard, Language, OptimizationLevel};
 
 pub(crate) fn build() -> Result<(), Box<dyn Error>>{
-    let build_content = fs::read_to_string("pam.toml")?;
+    let build_content = fs::read_to_string("ez.toml")?;
     let build = toml::from_str::<BuildConfiguration>(&build_content)?;
 
     if let Some(ref sources) = build.project.sources {
