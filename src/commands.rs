@@ -120,6 +120,12 @@ pub(crate) fn build(ez_configuration: &EzConfiguration) -> Result<(), Box<dyn Er
 
                 command.arg(source);
 
+                if let Some(ref includes) = build.project.includes {
+                    for include in includes {
+                        command.arg(&format!("-I{}", include));
+                    }
+                }
+
                 match build.project.language {
                     Language::C => {
                         if let Some(ref gcc) = build.gcc {

@@ -8,6 +8,7 @@ pub(crate) struct ProjectConfiguration {
     pub(crate) author: Option<String>,
     pub(crate) language: Language,
     pub(crate) sources: Option<Vec<String>>,
+    pub(crate) includes: Option<Vec<String>>,
     pub(crate) optimization: Option<OptimizationLevel>,
     pub(crate) enable_all_warnings: Option<bool>,
     pub(crate) treat_all_warnings_as_errors: Option<bool>,
