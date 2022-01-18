@@ -1,4 +1,6 @@
-use crate::config::{CConfiguration, CPPConfiguration, GCCConfiguration, ProjectConfiguration};
+use crate::config::{
+    CConfiguration, CPPConfiguration, GCCConfiguration, GPPConfiguration, ProjectConfiguration,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize)]
@@ -8,4 +10,5 @@ pub(crate) struct BuildConfiguration {
     pub(crate) c: Option<CConfiguration>,
     pub(crate) cpp: Option<CPPConfiguration>,
     pub(crate) gcc: Option<GCCConfiguration>,
+    pub(crate) gpp: Option<GPPConfiguration>,
 }

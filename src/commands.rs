@@ -12,19 +12,40 @@ pub(crate) fn build(ez_configuration: &EzConfiguration) -> Result<(), Box<dyn Er
     let build = toml::from_str::<BuildConfiguration>(&build_content)?;
 
     if let Some(ref sources) = build.project.sources {
-        let gcc_location =
-            locate_gcc(ez_configuration).ok_or_else(|| eyre!("Failed to locate GCC"))?;
+        let compiler_location = match build.project.language {
+            Language::C => {
+                locate_gcc(ez_configuration).ok_or_else(|| eyre!("Failed to locate GCC"))?
+            }
+            Language::CPP => {
+                locate_gpp(ez_configuration).ok_or_else(|| eyre!("Failed to locate G++"))?
+            }
+        };
 
         if !sources.is_empty() {
             for source in sources {
                 println!("Compiling {} in {}", source, build.project.name);
 
-                let mut command = Command::new(&gcc_location);
+                let mut command = Command::new(&compiler_location);
 
-                if let Some(ref gcc) = build.gcc {
-                    if let Some(ref additional_pre_arguments) = gcc.additional_pre_arguments {
-                        for additional_pre_argument in additional_pre_arguments {
-                            command.arg(additional_pre_argument);
+                match build.project.language {
+                    Language::C => {
+                        if let Some(ref gcc) = build.gcc {
+                            if let Some(ref additional_pre_arguments) = gcc.additional_pre_arguments
+                            {
+                                for additional_pre_argument in additional_pre_arguments {
+                                    command.arg(additional_pre_argument);
+                                }
+                            }
+                        }
+                    }
+                    Language::CPP => {
+                        if let Some(ref gpp) = build.gpp {
+                            if let Some(ref additional_pre_arguments) = gpp.additional_pre_arguments
+                            {
+                                for additional_pre_argument in additional_pre_arguments {
+                                    command.arg(additional_pre_argument);
+                                }
+                            }
                         }
                     }
                 }
@@ -102,10 +123,27 @@ pub(crate) fn build(ez_configuration: &EzConfiguration) -> Result<(), Box<dyn Er
                     PathBuf::from(source).with_extension("o").to_str().unwrap()
                 ));
 
-                if let Some(ref gcc) = build.gcc {
-                    if let Some(ref additional_post_arguments) = gcc.additional_post_arguments {
-                        for additional_post_argument in additional_post_arguments {
-                            command.arg(additional_post_argument);
+                match build.project.language {
+                    Language::C => {
+                        if let Some(ref gcc) = build.gcc {
+                            if let Some(ref additional_post_arguments) =
+                                gcc.additional_post_arguments
+                            {
+                                for additional_post_argument in additional_post_arguments {
+                                    command.arg(additional_post_argument);
+                                }
+                            }
+                        }
+                    }
+                    Language::CPP => {
+                        if let Some(ref gpp) = build.gpp {
+                            if let Some(ref additional_post_arguments) =
+                                gpp.additional_post_arguments
+                            {
+                                for additional_post_argument in additional_post_arguments {
+                                    command.arg(additional_post_argument);
+                                }
+                            }
                         }
                     }
                 }
@@ -124,7 +162,7 @@ pub(crate) fn build(ez_configuration: &EzConfiguration) -> Result<(), Box<dyn Er
 
             println!("Linking {}", build.project.name);
 
-            let output = Command::new(&gcc_location)
+            let output = Command::new(&compiler_location)
                 .arg(&sources.join(" "))
                 .arg(&format!("-o{}", build.project.name))
                 .output()?;
@@ -147,6 +185,20 @@ fn locate_gcc(ez_configuration: &EzConfiguration) -> Option<String> {
             Some(which::which("gcc.exe").ok()?.to_string_lossy().into_owned())
         } else if cfg!(target_os = "macos") || cfg!(target_os = "linux") {
             Some(which::which("gcc").ok()?.to_string_lossy().into_owned())
+        } else {
+            None
+        }
+    }
+}
+
+fn locate_gpp(ez_configuration: &EzConfiguration) -> Option<String> {
+    if let Some(ref gpp_location) = ez_configuration.gpp_location {
+        Some(gpp_location.clone())
+    } else {
+        if cfg!(target_os = "windows") {
+            Some(which::which("g++.exe").ok()?.to_string_lossy().into_owned())
+        } else if cfg!(target_os = "macos") || cfg!(target_os = "linux") {
+            Some(which::which("g++").ok()?.to_string_lossy().into_owned())
         } else {
             None
         }
