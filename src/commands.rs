@@ -4,7 +4,6 @@ use crate::config::{
 use eyre::eyre;
 use std::error::Error;
 use std::fs;
-use std::path::PathBuf;
 use std::process::Command;
 
 pub(crate) fn build(ez_configuration: &EzConfiguration) -> Result<(), Box<dyn Error>> {
@@ -49,6 +48,8 @@ pub(crate) fn build(ez_configuration: &EzConfiguration) -> Result<(), Box<dyn Er
                         }
                     }
                 }
+
+                command.arg("-c");
 
                 command.arg(&format!(
                     "-x{}",
@@ -118,10 +119,6 @@ pub(crate) fn build(ez_configuration: &EzConfiguration) -> Result<(), Box<dyn Er
                 }
 
                 command.arg(source);
-                command.arg(&format!(
-                    "-o{}",
-                    PathBuf::from(source).with_extension("o").to_str().unwrap()
-                ));
 
                 match build.project.language {
                     Language::C => {
