@@ -7,6 +7,7 @@ pub(crate) struct ProjectConfiguration {
     pub(crate) description: Option<String>,
     pub(crate) author: Option<String>,
     pub(crate) language: Language,
+    pub(crate) distribution: Distribution,
     pub(crate) sources: Option<Vec<String>>,
     pub(crate) includes: Option<Vec<String>>,
     pub(crate) optimization: Option<OptimizationLevel>,
@@ -20,6 +21,13 @@ pub(crate) enum Language {
     C,
     #[serde(rename = "C++", alias = "c++")]
     CPP,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum Distribution {
+    Executable,
+    StaticLibrary,
 }
 
 #[derive(Deserialize, Serialize)]

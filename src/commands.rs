@@ -1,9 +1,11 @@
 use crate::config::{
-    BuildConfiguration, CPPStandard, CStandard, EzConfiguration, Language, OptimizationLevel,
+    BuildConfiguration, CPPStandard, CStandard, Distribution, EzConfiguration, Language,
+    OptimizationLevel,
 };
 use eyre::eyre;
 use std::error::Error;
 use std::fs;
+use std::path::PathBuf;
 use std::process::Command;
 
 pub(crate) fn build(ez_configuration: &EzConfiguration) -> Result<(), Box<dyn Error>> {
@@ -19,6 +21,9 @@ pub(crate) fn build(ez_configuration: &EzConfiguration) -> Result<(), Box<dyn Er
                 locate_gpp(ez_configuration).ok_or_else(|| eyre!("Failed to locate G++"))?
             }
         };
+
+        let archiver_location =
+            locate_ar(ez_configuration).ok_or_else(|| eyre!("Failed to locate ar"))?;
 
         if !sources.is_empty() {
             for source in sources {
@@ -163,16 +168,53 @@ pub(crate) fn build(ez_configuration: &EzConfiguration) -> Result<(), Box<dyn Er
                 }
             }
 
-            println!("Linking {}", build.project.name);
+            match build.project.distribution {
+                Distribution::Executable => {
+                    println!("Linking {}", build.project.name);
 
-            let output = Command::new(&compiler_location)
-                .arg(&sources.join(" "))
-                .arg(&format!("-o{}", build.project.name))
-                .output()?;
+                    let output = Command::new(&compiler_location)
+                        .arg(&sources.join(" "))
+                        .arg(&format!("-o{}", build.project.name))
+                        .output()?;
 
-            if !output.status.success() {
-                println!("Failed to link {}", build.project.name);
-                print!("{}", String::from_utf8_lossy(&output.stderr));
+                    if !output.status.success() {
+                        println!("Failed to link {}", build.project.name);
+                        print!("{}", String::from_utf8_lossy(&output.stderr));
+                    }
+                }
+                Distribution::StaticLibrary => {
+                    println!("Archiving {}", build.project.name);
+
+                    let output = Command::new(&archiver_location)
+                        .arg("rcs")
+                        .arg(format!(
+                            "{}.{}",
+                            build.project.name,
+                            if cfg!(target_os = "windows") {
+                                "lib"
+                            } else {
+                                "a"
+                            }
+                        ))
+                        .arg(
+                            &sources
+                                .iter()
+                                .map(|source| {
+                                    PathBuf::from(PathBuf::from(source).file_name().unwrap())
+                                        .with_extension("o")
+                                        .to_string_lossy()
+                                        .into_owned()
+                                })
+                                .collect::<Vec<String>>()
+                                .join(" "),
+                        )
+                        .output()?;
+
+                    if !output.status.success() {
+                        println!("Failed to archive {}", build.project.name);
+                        print!("{}", String::from_utf8_lossy(&output.stderr));
+                    }
+                }
             }
         }
     }
@@ -202,6 +244,20 @@ fn locate_gpp(ez_configuration: &EzConfiguration) -> Option<String> {
             Some(which::which("g++.exe").ok()?.to_string_lossy().into_owned())
         } else if cfg!(target_os = "macos") || cfg!(target_os = "linux") {
             Some(which::which("g++").ok()?.to_string_lossy().into_owned())
+        } else {
+            None
+        }
+    }
+}
+
+fn locate_ar(ez_configuration: &EzConfiguration) -> Option<String> {
+    if let Some(ref ar_location) = ez_configuration.ar_location {
+        Some(ar_location.clone())
+    } else {
+        if cfg!(target_os = "windows") {
+            Some(which::which("ar.exe").ok()?.to_string_lossy().into_owned())
+        } else if cfg!(target_os = "macos") || cfg!(target_os = "linux") {
+            Some(which::which("ar").ok()?.to_string_lossy().into_owned())
         } else {
             None
         }
