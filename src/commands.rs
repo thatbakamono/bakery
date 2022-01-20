@@ -175,6 +175,19 @@ pub(crate) fn build(ez_configuration: &EzConfiguration) -> Result<(), Box<dyn Er
                     let output = Command::new(&compiler_location)
                         .arg(&sources.join(" "))
                         .arg(&format!("-o{}", build.project.name))
+                        .arg(
+                            build
+                                .project
+                                .includes
+                                .map(|includes| {
+                                    includes
+                                        .iter()
+                                        .map(|include| format!("-I{}", include))
+                                        .collect::<Vec<String>>()
+                                })
+                                .unwrap()
+                                .join(" "),
+                        )
                         .output()?;
 
                     if !output.status.success() {
