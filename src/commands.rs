@@ -56,6 +56,10 @@ pub(crate) fn build(ez_configuration: &EzConfiguration) -> Result<(), Box<dyn Er
 
                 command.arg("-c");
 
+                if build.project.distribution == Distribution::DynamicLibrary {
+                    command.arg("-fPIC");
+                }
+
                 command.arg(&format!(
                     "-x{}",
                     match build.project.language {
@@ -172,23 +176,34 @@ pub(crate) fn build(ez_configuration: &EzConfiguration) -> Result<(), Box<dyn Er
                 Distribution::Executable => {
                     println!("Linking {}", build.project.name);
 
-                    let output = Command::new(&compiler_location)
-                        .arg(&sources.join(" "))
-                        .arg(&format!("-o{}", build.project.name))
-                        .arg(
-                            build
-                                .project
-                                .includes
-                                .map(|includes| {
-                                    includes
-                                        .iter()
-                                        .map(|include| format!("-I{}", include))
-                                        .collect::<Vec<String>>()
-                                })
-                                .unwrap()
+                    let mut command = Command::new(&compiler_location);
+
+                    command.arg(
+                        &sources
+                            .iter()
+                            .map(|source| {
+                                PathBuf::from(PathBuf::from(source).file_name().unwrap())
+                                    .with_extension("o")
+                                    .to_string_lossy()
+                                    .into_owned()
+                            })
+                            .collect::<Vec<String>>()
+                            .join(" "),
+                    );
+
+                    command.arg(&format!("-o{}", build.project.name));
+
+                    if let Some(ref includes) = build.project.includes {
+                        command.arg(
+                            &includes
+                                .iter()
+                                .map(|include| format!("-I{}", include))
+                                .collect::<Vec<String>>()
                                 .join(" "),
-                        )
-                        .output()?;
+                        );
+                    }
+
+                    let output = command.output()?;
 
                     if !output.status.success() {
                         println!("Failed to link {}", build.project.name);
@@ -198,33 +213,87 @@ pub(crate) fn build(ez_configuration: &EzConfiguration) -> Result<(), Box<dyn Er
                 Distribution::StaticLibrary => {
                     println!("Archiving {}", build.project.name);
 
-                    let output = Command::new(&archiver_location)
-                        .arg("rcs")
-                        .arg(format!(
-                            "{}.{}",
-                            build.project.name,
-                            if cfg!(target_os = "windows") {
-                                "lib"
-                            } else {
-                                "a"
-                            }
-                        ))
-                        .arg(
-                            &sources
-                                .iter()
-                                .map(|source| {
-                                    PathBuf::from(PathBuf::from(source).file_name().unwrap())
-                                        .with_extension("o")
-                                        .to_string_lossy()
-                                        .into_owned()
-                                })
-                                .collect::<Vec<String>>()
-                                .join(" "),
-                        )
-                        .output()?;
+                    let mut command = Command::new(&archiver_location);
+
+                    command.arg("rcs");
+
+                    command.arg(format!(
+                        "{}.{}",
+                        build.project.name,
+                        if cfg!(target_os = "windows") {
+                            "lib"
+                        } else if cfg!(target_os = "linux") {
+                            "a"
+                        } else {
+                            unreachable!()
+                        }
+                    ));
+
+                    command.arg(
+                        &sources
+                            .iter()
+                            .map(|source| {
+                                PathBuf::from(PathBuf::from(source).file_name().unwrap())
+                                    .with_extension("o")
+                                    .to_string_lossy()
+                                    .into_owned()
+                            })
+                            .collect::<Vec<String>>()
+                            .join(" "),
+                    );
+
+                    let output = command.output()?;
 
                     if !output.status.success() {
                         println!("Failed to archive {}", build.project.name);
+                        print!("{}", String::from_utf8_lossy(&output.stderr));
+                    }
+                }
+                Distribution::DynamicLibrary => {
+                    println!("Linking {}", build.project.name);
+
+                    let mut command = Command::new(&compiler_location);
+
+                    command.arg("-shared");
+
+                    command.arg(
+                        &sources
+                            .iter()
+                            .map(|source| {
+                                PathBuf::from(PathBuf::from(source).file_name().unwrap())
+                                    .with_extension("o")
+                                    .to_string_lossy()
+                                    .into_owned()
+                            })
+                            .collect::<Vec<String>>()
+                            .join(" "),
+                    );
+
+                    command.arg(&format!(
+                        "-o{}",
+                        if cfg!(target_os = "windows") {
+                            format!("{}.dll", build.project.name)
+                        } else if cfg!(target_os = "linux") {
+                            format!("{}.so", build.project.name)
+                        } else {
+                            unreachable!()
+                        }
+                    ));
+
+                    if let Some(ref includes) = build.project.includes {
+                        command.arg(
+                            &includes
+                                .iter()
+                                .map(|include| format!("-I{}", include))
+                                .collect::<Vec<String>>()
+                                .join(" "),
+                        );
+                    }
+
+                    let output = command.output()?;
+
+                    if !output.status.success() {
+                        println!("Failed to link {}", build.project.name);
                         print!("{}", String::from_utf8_lossy(&output.stderr));
                     }
                 }

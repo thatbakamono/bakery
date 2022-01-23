@@ -23,11 +23,12 @@ pub(crate) enum Language {
     CPP,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum Distribution {
     Executable,
     StaticLibrary,
+    DynamicLibrary,
 }
 
 #[derive(Deserialize, Serialize)]
