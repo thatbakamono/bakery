@@ -13,6 +13,8 @@ pub(crate) fn build(ez_configuration: &EzConfiguration) -> Result<(), Box<dyn Er
     let build = toml::from_str::<BuildConfiguration>(&build_content)?;
 
     if let Some(ref sources) = build.project.sources {
+        fs::create_dir_all(".ez/build")?;
+
         let compiler_location = match build.project.language {
             Language::C => {
                 locate_gcc(ez_configuration).ok_or_else(|| eyre!("Failed to locate GCC"))?
@@ -129,6 +131,16 @@ pub(crate) fn build(ez_configuration: &EzConfiguration) -> Result<(), Box<dyn Er
 
                 command.arg(source);
 
+                command.arg(format!(
+                    "-o{}",
+                    PathBuf::from(format!(
+                        ".ez/build/{}",
+                        PathBuf::from(source).file_name().unwrap().to_string_lossy()
+                    ))
+                    .with_extension("o")
+                    .to_string_lossy()
+                ));
+
                 if let Some(ref includes) = build.project.includes {
                     for include in includes {
                         command.arg(&format!("-I{}", include));
@@ -182,16 +194,19 @@ pub(crate) fn build(ez_configuration: &EzConfiguration) -> Result<(), Box<dyn Er
                         &sources
                             .iter()
                             .map(|source| {
-                                PathBuf::from(PathBuf::from(source).file_name().unwrap())
-                                    .with_extension("o")
-                                    .to_string_lossy()
-                                    .into_owned()
+                                PathBuf::from(format!(
+                                    ".ez/build/{}",
+                                    PathBuf::from(source).file_name().unwrap().to_string_lossy()
+                                ))
+                                .with_extension("o")
+                                .to_string_lossy()
+                                .into_owned()
                             })
                             .collect::<Vec<String>>()
                             .join(" "),
                     );
 
-                    command.arg(&format!("-o{}", build.project.name));
+                    command.arg(&format!("-o.ez/build/{}", build.project.name));
 
                     if let Some(ref includes) = build.project.includes {
                         command.arg(
@@ -218,7 +233,7 @@ pub(crate) fn build(ez_configuration: &EzConfiguration) -> Result<(), Box<dyn Er
                     command.arg("rcs");
 
                     command.arg(format!(
-                        "{}.{}",
+                        ".ez/build/{}.{}",
                         build.project.name,
                         if cfg!(target_os = "windows") {
                             "lib"
@@ -233,10 +248,13 @@ pub(crate) fn build(ez_configuration: &EzConfiguration) -> Result<(), Box<dyn Er
                         &sources
                             .iter()
                             .map(|source| {
-                                PathBuf::from(PathBuf::from(source).file_name().unwrap())
-                                    .with_extension("o")
-                                    .to_string_lossy()
-                                    .into_owned()
+                                PathBuf::from(format!(
+                                    ".ez/build/{}",
+                                    PathBuf::from(source).file_name().unwrap().to_string_lossy()
+                                ))
+                                .with_extension("o")
+                                .to_string_lossy()
+                                .into_owned()
                             })
                             .collect::<Vec<String>>()
                             .join(" "),
@@ -260,10 +278,13 @@ pub(crate) fn build(ez_configuration: &EzConfiguration) -> Result<(), Box<dyn Er
                         &sources
                             .iter()
                             .map(|source| {
-                                PathBuf::from(PathBuf::from(source).file_name().unwrap())
-                                    .with_extension("o")
-                                    .to_string_lossy()
-                                    .into_owned()
+                                PathBuf::from(format!(
+                                    ".ez/build/{}",
+                                    PathBuf::from(source).file_name().unwrap().to_string_lossy()
+                                ))
+                                .with_extension("o")
+                                .to_string_lossy()
+                                .into_owned()
                             })
                             .collect::<Vec<String>>()
                             .join(" "),
@@ -272,9 +293,9 @@ pub(crate) fn build(ez_configuration: &EzConfiguration) -> Result<(), Box<dyn Er
                     command.arg(&format!(
                         "-o{}",
                         if cfg!(target_os = "windows") {
-                            format!("{}.dll", build.project.name)
+                            format!(".ez/build/{}.dll", build.project.name)
                         } else if cfg!(target_os = "linux") {
-                            format!("{}.so", build.project.name)
+                            format!(".ez/build/{}.so", build.project.name)
                         } else {
                             unreachable!()
                         }
