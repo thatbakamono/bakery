@@ -325,6 +325,29 @@ pub(crate) fn build(ez_configuration: &EzConfiguration) -> Result<(), Box<dyn Er
     Ok(())
 }
 
+pub(crate) fn run(ez_configuration: &EzConfiguration) -> Result<(), Box<dyn Error>> {
+    let build_configuration_content = fs::read_to_string("ez.toml")?;
+    let build_configuration = toml::from_str::<BuildConfiguration>(&build_configuration_content)?;
+
+    build(ez_configuration)?;
+
+    println!("Running");
+
+    Command::new(format!(
+        ".ez/build/{}",
+        if cfg!(target_os = "windows") {
+            format!("{}.exe", build_configuration.project.name)
+        } else if cfg!(target_os = "linux") {
+            build_configuration.project.name.clone()
+        } else {
+            unreachable!()
+        }
+    ))
+    .status()?;
+
+    Ok(())
+}
+
 fn locate_gcc(ez_configuration: &EzConfiguration) -> Option<String> {
     if let Some(ref gcc_location) = ez_configuration.gcc_location {
         Some(gcc_location.clone())

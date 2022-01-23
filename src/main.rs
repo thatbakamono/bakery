@@ -37,10 +37,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         .author("Bakamono")
         .about("Build system for C/C++")
         .subcommand(SubCommand::with_name("build"))
+        .subcommand(SubCommand::with_name("run"))
         .get_matches();
 
     if let Some(_) = matches.subcommand_matches("build") {
         commands::build(&ez_configuration)?;
+    } else if let Some(_) = matches.subcommand_matches("run") {
+        commands::run(&ez_configuration)?;
     }
 
     Ok(())
