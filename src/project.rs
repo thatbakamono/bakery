@@ -7,6 +7,35 @@ use std::process::Command;
 use std::{fs, io};
 use thiserror::Error;
 
+const BUILD_CONFIGURATION_FILE: &'static str = "ez.toml";
+const EZ_BUILD_DIRECTORY: &'static str = ".ez/build";
+
+const EXECUTABLE_EXTENSION: &'static str = if cfg!(target_os = "windows") {
+    "exe"
+} else if cfg!(target_os = "linux") {
+    ""
+} else {
+    unreachable!()
+};
+
+const DYNAMIC_LIBRARY_EXTENSION: &'static str = if cfg!(target_os = "windows") {
+    "dll"
+} else if cfg!(target_os = "linux") {
+    "so"
+} else {
+    unreachable!()
+};
+
+const STATIC_LIBRARY_EXTENSION: &'static str = if cfg!(target_os = "windows") {
+    "lib"
+} else if cfg!(target_os = "linux") {
+    "a"
+} else {
+    unreachable!()
+};
+
+const OBJECT_FILE_EXTENSION: &'static str = "o";
+
 pub(crate) struct Project {
     configuration: BuildConfiguration,
     base_path: PathBuf,
@@ -14,7 +43,7 @@ pub(crate) struct Project {
 
 impl Project {
     pub(crate) fn open(path: impl AsRef<Path>) -> Result<Project, ProjectOpenError> {
-        let build_configuration_path = path.as_ref().join("ez.toml");
+        let build_configuration_path = path.as_ref().join(BUILD_CONFIGURATION_FILE);
 
         let build_configuration_content = fs::read_to_string(build_configuration_path)
             .map_err(|_| ProjectOpenError::InvalidProjectPath)?;
@@ -110,7 +139,7 @@ impl Project {
         if !self.configuration.project.sources.is_empty() {
             println!("Building {}", self.configuration.project.name);
 
-            fs::create_dir_all(Path::new(&self.base_path).join(".ez/build"))
+            fs::create_dir_all(Path::new(&self.base_path).join(EZ_BUILD_DIRECTORY))
                 .map_err(|err| ProjectBuildError::IOError(err))?;
 
             let mut object_files = vec![];
@@ -121,9 +150,9 @@ impl Project {
                 let absolute_source_file_path = Path::new(&self.base_path).join(source);
 
                 let absolute_output_file_path = Path::new(&self.base_path)
-                    .join(".ez/build")
+                    .join(EZ_BUILD_DIRECTORY)
                     .join(PathBuf::from(source).file_name().unwrap())
-                    .with_extension("o");
+                    .with_extension(OBJECT_FILE_EXTENSION);
 
                 object_files.push(absolute_output_file_path.clone());
 
@@ -209,14 +238,12 @@ impl Project {
                 {
                     object_files.push(
                         Path::new(&project_dependency.base_path)
-                            .join(".ez/build")
-                            .join(if cfg!(target_os = "windows") {
-                                format!("{}.lib", project_dependency.configuration.project.name)
-                            } else if cfg!(target_os = "linux") {
-                                format!("{}.a", project_dependency.configuration.project.name)
-                            } else {
-                                unreachable!()
-                            }),
+                            .join(EZ_BUILD_DIRECTORY)
+                            .join(format!(
+                                "{}.{}",
+                                project_dependency.configuration.project.name,
+                                STATIC_LIBRARY_EXTENSION
+                            )),
                     );
                 }
             }
@@ -226,15 +253,9 @@ impl Project {
                     println!("Generating executable");
 
                     let absolute_output_file_path = Path::new(&self.base_path)
-                        .join(".ez/build")
+                        .join(EZ_BUILD_DIRECTORY)
                         .join(&self.configuration.project.name)
-                        .with_extension(if cfg!(target_os = "windows") {
-                            "exe"
-                        } else if cfg!(target_os = "linux") {
-                            ""
-                        } else {
-                            unreachable!()
-                        });
+                        .with_extension(EXECUTABLE_EXTENSION);
 
                     let libraries = system_dependencies
                         .into_iter()
@@ -253,7 +274,7 @@ impl Project {
                         .iter()
                         .map(|project| {
                             Path::new(&project.base_path)
-                                .join(".ez/build")
+                                .join(EZ_BUILD_DIRECTORY)
                                 .to_string_lossy()
                                 .into_owned()
                         })
@@ -292,15 +313,9 @@ impl Project {
                     println!("Generating static library");
 
                     let absolute_output_file_path = Path::new(&self.base_path)
-                        .join(".ez/build")
+                        .join(EZ_BUILD_DIRECTORY)
                         .join(&self.configuration.project.name)
-                        .with_extension(if cfg!(target_os = "windows") {
-                            "lib"
-                        } else if cfg!(target_os = "linux") {
-                            "a"
-                        } else {
-                            unreachable!()
-                        });
+                        .with_extension(STATIC_LIBRARY_EXTENSION);
 
                     if let Err(error_message) =
                         ar.archive_object_files(&object_files, &absolute_output_file_path)
@@ -314,15 +329,9 @@ impl Project {
                     println!("Generating dynamic library");
 
                     let absolute_output_file_path = Path::new(&self.base_path)
-                        .join(".ez/build")
+                        .join(EZ_BUILD_DIRECTORY)
                         .join(&self.configuration.project.name)
-                        .with_extension(if cfg!(target_os = "windows") {
-                            "dll"
-                        } else if cfg!(target_os = "linux") {
-                            "so"
-                        } else {
-                            unreachable!()
-                        });
+                        .with_extension(DYNAMIC_LIBRARY_EXTENSION);
 
                     let libraries = system_dependencies
                         .into_iter()
@@ -341,7 +350,7 @@ impl Project {
                         .iter()
                         .map(|project| {
                             Path::new(&project.base_path)
-                                .join(".ez/build")
+                                .join(EZ_BUILD_DIRECTORY)
                                 .to_string_lossy()
                                 .into_owned()
                         })
@@ -388,7 +397,7 @@ impl Project {
                 fs::copy(
                     &artifact,
                     self.base_path
-                        .join(".ez/build")
+                        .join(EZ_BUILD_DIRECTORY)
                         .join(artifact.file_name().unwrap()),
                 )
                 .map_err(|err| ProjectBuildError::IOError(err))?;
@@ -409,15 +418,9 @@ impl Project {
             .map_err(|err| ProjectRunError::FailedToBuildProject(err))?;
 
         let absolute_executable_path = Path::new(&self.base_path)
-            .join(".ez/build")
+            .join(EZ_BUILD_DIRECTORY)
             .join(&self.configuration.project.name)
-            .with_extension(if cfg!(target_os = "windows") {
-                "exe"
-            } else if cfg!(target_os = "linux") {
-                ""
-            } else {
-                unreachable!()
-            });
+            .with_extension(EXECUTABLE_EXTENSION);
 
         let mut command = Command::new(&absolute_executable_path);
 
@@ -432,16 +435,9 @@ impl Project {
         let mut artifacts = Vec::new();
 
         if self.configuration.project.distribution == Distribution::DynamicLibrary {
-            artifacts.push(self.base_path.join(".ez/build").join(format!(
+            artifacts.push(self.base_path.join(EZ_BUILD_DIRECTORY).join(format!(
                 "{}.{}",
-                self.configuration.project.name,
-                if cfg!(target_os = "windows") {
-                    "dll"
-                } else if cfg!(target_os = "linux") {
-                    "so"
-                } else {
-                    unreachable!()
-                }
+                self.configuration.project.name, DYNAMIC_LIBRARY_EXTENSION
             )));
         }
 
