@@ -6,7 +6,7 @@ pub(crate) struct CConfiguration {
     pub(crate) standard: Option<CStandard>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub(crate) enum CStandard {
     #[serde(rename = "89")]
     EightyNine,
@@ -16,4 +16,10 @@ pub(crate) enum CStandard {
     Eleven,
     #[serde(rename = "17")]
     Seventeen,
+}
+
+impl CStandard {
+    pub(crate) fn latest() -> CStandard {
+        CStandard::Seventeen
+    }
 }

@@ -1,5 +1,8 @@
-mod commands;
 mod config;
+mod project;
+mod tools;
+
+pub(crate) use project::*;
 
 use clap::{App, SubCommand};
 use config::EzConfiguration;
@@ -40,10 +43,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         .subcommand(SubCommand::with_name("run"))
         .get_matches();
 
-    if let Some(_) = matches.subcommand_matches("build") {
-        commands::build(&ez_configuration)?;
-    } else if let Some(_) = matches.subcommand_matches("run") {
-        commands::run(&ez_configuration)?;
+    if matches.subcommand_matches("build").is_some() {
+        Project::open(".")?.build(&ez_configuration)?;
+    } else if matches.subcommand_matches("run").is_some() {
+        Project::open(".")?.run(&ez_configuration)?;
     }
 
     Ok(())

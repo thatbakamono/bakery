@@ -7,12 +7,20 @@ pub(crate) struct ProjectConfiguration {
     pub(crate) description: Option<String>,
     pub(crate) author: Option<String>,
     pub(crate) language: Language,
+    #[serde(default)]
     pub(crate) distribution: Distribution,
-    pub(crate) sources: Option<Vec<String>>,
-    pub(crate) includes: Option<Vec<String>>,
-    pub(crate) optimization: Option<OptimizationLevel>,
-    pub(crate) enable_all_warnings: Option<bool>,
-    pub(crate) treat_all_warnings_as_errors: Option<bool>,
+    #[serde(default)]
+    pub(crate) sources: Vec<String>,
+    #[serde(default)]
+    pub(crate) includes: Vec<String>,
+    #[serde(default)]
+    pub(crate) dependencies: Vec<Dependency>,
+    #[serde(default)]
+    pub(crate) optimization: OptimizationLevel,
+    #[serde(default)]
+    pub(crate) enable_all_warnings: bool,
+    #[serde(default)]
+    pub(crate) treat_all_warnings_as_errors: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -23,7 +31,7 @@ pub(crate) enum Language {
     CPP,
 }
 
-#[derive(PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum Distribution {
     Executable,
@@ -31,7 +39,20 @@ pub(crate) enum Distribution {
     DynamicLibrary,
 }
 
+impl Default for Distribution {
+    fn default() -> Self {
+        Self::Executable
+    }
+}
+
 #[derive(Deserialize, Serialize)]
+#[serde(untagged)]
+pub(crate) enum Dependency {
+    Local { path: String },
+    System { name: String },
+}
+
+#[derive(Clone, Deserialize, Serialize)]
 pub(crate) enum OptimizationLevel {
     #[serde(rename = "0")]
     Zero,
@@ -47,4 +68,10 @@ pub(crate) enum OptimizationLevel {
     Size,
     #[serde(alias = "debug")]
     Debug,
+}
+
+impl Default for OptimizationLevel {
+    fn default() -> Self {
+        Self::Zero
+    }
 }
