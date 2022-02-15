@@ -2,6 +2,7 @@ use crate::config::{
     BuildConfiguration, CPPStandard, CStandard, Dependency, Distribution, EzConfiguration, Language,
 };
 use crate::tools::{Ar, GCC, GPP};
+use glob::glob;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{fs, io};
@@ -108,6 +109,42 @@ impl Project {
             println!("Built dependencies");
         }
 
+        let sources = self
+            .configuration
+            .project
+            .sources
+            .clone()
+            .into_iter()
+            .map(|source| {
+                glob(&source)
+                    .map(|paths| {
+                        paths
+                            .into_iter()
+                            .map(|path| {
+                                path.map(|path| path.to_string_lossy().into_owned())
+                                    .map_err(
+                                        |_| ProjectBuildError::IncorrectSource(source.clone()),
+                                    )
+                            })
+                            .collect::<Result<Vec<_>, _>>()
+                    })
+                    .map_err(|err| ProjectBuildError::IncorrectWildcard(String::from(err.msg)))
+            })
+            .flatten()
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .map(|source| {
+                let path = PathBuf::from(&source);
+    
+                if path.exists() && path.is_file() && !path.is_symlink() {
+                    Ok(source)
+                } else {
+                    Err(ProjectBuildError::IncorrectSource(source))
+                }
+            })
+            .collect::<Result<Vec<String>, _>>()?;
+
         let includes = self
             .configuration
             .project
@@ -136,7 +173,7 @@ impl Project {
             }))
             .collect::<Vec<_>>();
 
-        if !self.configuration.project.sources.is_empty() {
+        if !sources.is_empty() {
             println!("Building {}", self.configuration.project.name);
 
             fs::create_dir_all(Path::new(&self.base_path).join(EZ_BUILD_DIRECTORY))
@@ -144,7 +181,7 @@ impl Project {
 
             let mut object_files = vec![];
 
-            for source in &self.configuration.project.sources {
+            for source in &sources {
                 println!("Compiling {}", source);
 
                 let absolute_source_file_path = Path::new(&self.base_path).join(source);
@@ -479,6 +516,10 @@ pub(crate) enum ProjectBuildError {
     LinkerError(String),
     #[error("failed to archive project: {0}")]
     ArchiverError(String),
+    #[error("found incorrect wildcard: {0}")]
+    IncorrectWildcard(String),
+    #[error("found incorrect source: {0}")]
+    IncorrectSource(String),
 }
 
 #[derive(Error, Debug)]
