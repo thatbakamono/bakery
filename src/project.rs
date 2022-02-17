@@ -355,13 +355,56 @@ impl Project {
             .map_err(ProjectBuildError::FailedToOpenFile)?,
         );
 
-        for source in &sources_to_compile {
-            println!("Compiling {}", source);
+        let (hashes, errors) = sources_to_compile
+            .par_iter()
+            .fold(
+                || (HashMap::new(), Vec::new()),
+                |(mut hashes, mut errors), source| {
+                    println!("Compiling {}", source);
 
-            self.build_source_file(source, &gcc, &gpp, &mut current_hashes)?;
+                    match self.build_source_file(source, &gcc, &gpp) {
+                        Ok(_) => {
+                            match File::open(
+                                &self
+                                    .base_path
+                                    .join(EZ_BUILD_DIRECTORY)
+                                    .join(PathBuf::from(source).file_name().unwrap())
+                                    .with_extension(OBJECT_FILE_EXTENSION),
+                            ) {
+                                Ok(file) => match hash_file(&file) {
+                                    Ok(hash) => {
+                                        hashes.insert((*source).clone(), hash);
 
-            println!("Compiled {}", source);
+                                        println!("Compiled {}", source);
+                                    }
+                                    Err(err) => {
+                                        errors.push(SourceFileBuildError::FailedToHash(err))
+                                    }
+                                },
+                                Err(err) => errors.push(SourceFileBuildError::FailedToHash(err)),
+                            }
+                        }
+                        Err(err) => errors.push(err),
+                    }
+
+                    (hashes, errors)
+                },
+            )
+            .reduce(
+                || (HashMap::new(), Vec::new()),
+                |(mut hashes1, mut errors1), (hashes2, errors2)| {
+                    hashes1.extend(hashes2.into_iter());
+                    errors1.extend(errors2.into_iter());
+
+                    (hashes1, errors1)
+                },
+            );
+
+        if errors.len() > 0 {
+            return Err(ProjectBuildError::CompilationError(errors));
         }
+
+        current_hashes.extend(hashes.into_iter());
 
         let hashes_content = serde_json::to_string_pretty(
             &current_hashes
@@ -523,8 +566,7 @@ impl Project {
         source: &str,
         gcc: &GCC,
         gpp: &GPP,
-        current_hashes: &mut HashMap<String, Hash>,
-    ) -> Result<(), ProjectBuildError> {
+    ) -> Result<(), SourceFileBuildError> {
         let absolute_source_file_path = self.base_path.join(source);
 
         let absolute_output_file_path = self
@@ -532,12 +574,6 @@ impl Project {
             .join(EZ_BUILD_DIRECTORY)
             .join(PathBuf::from(source).file_name().unwrap())
             .with_extension(OBJECT_FILE_EXTENSION);
-
-        current_hashes.insert(
-            String::from(source),
-            hash_file(&File::open(&absolute_source_file_path).map_err(ProjectBuildError::FailedToOpenFile)?)
-                .map_err(ProjectBuildError::FailedToOpenFile)?,
-        );
 
         match self.language {
             Language::C => {
@@ -570,7 +606,7 @@ impl Project {
                     &additional_pre_arguments,
                     &additional_post_arguments,
                 )
-                .map_err(ProjectBuildError::CompilationError)?;
+                .map_err(SourceFileBuildError::FailedToCompile)?;
             }
             Language::CPP => {
                 let standard = self
@@ -602,7 +638,7 @@ impl Project {
                     &additional_pre_arguments,
                     &additional_post_arguments,
                 )
-                .map_err(ProjectBuildError::CompilationError)?;
+                .map_err(SourceFileBuildError::FailedToCompile)?;
             }
         }
 
@@ -727,8 +763,8 @@ pub(crate) enum ProjectBuildError {
     DependencyMustBeLibrary,
     #[error("failed to build a dependency: {0:?}")]
     FailedToBuildDependency(Box<ProjectBuildError>),
-    #[error("failed to compile a project: {0}")]
-    CompilationError(String),
+    #[error("failed to compile a project: {0:?}")]
+    CompilationError(Vec<SourceFileBuildError>),
     #[error("failed to link a project: {0}")]
     LinkageError(String),
     #[error("failed to archive a project: {0}")]
@@ -740,6 +776,14 @@ pub(crate) enum Tool {
     CCompiler,
     CppCompiler,
     Archiver,
+}
+
+#[derive(Error, Debug)]
+pub(crate) enum SourceFileBuildError {
+    #[error("failed to compile a source file: {0}")]
+    FailedToCompile(String),
+    #[error("failed to hash a source file: {0:?}")]
+    FailedToHash(io::Error),
 }
 
 #[derive(Error, Debug)]
