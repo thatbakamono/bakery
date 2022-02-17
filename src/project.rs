@@ -5,9 +5,11 @@ use crate::config::{
 use crate::tools::{Ar, GCC, GPP};
 use blake3::Hash;
 use glob::glob;
+use lazy_static::lazy_static;
 use memmap::MmapOptions;
 use pathdiff::diff_paths;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use regex::Regex;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
@@ -46,6 +48,10 @@ const STATIC_LIBRARY_EXTENSION: &str = if cfg!(target_os = "windows") {
 
 const OBJECT_FILE_EXTENSION: &str = "o";
 
+lazy_static! {
+    static ref NAME_REGEX: Regex = Regex::new("[a-zA-Z][a-zA-Z0-9]+").unwrap();
+}
+
 #[allow(dead_code)]
 pub(crate) struct Project {
     pub(crate) base_path: PathBuf,
@@ -81,28 +87,41 @@ impl Project {
 
         let (build_configuration_content, build_configuration_hash) = {
             let mut build_configuration_file = File::open(&build_configuration_file_path)
-                .map_err(|_| ProjectOpenError::InvalidProjectPath)?;
+                .map_err(ProjectOpenError::InvalidProjectPath)?;
             let build_configuration_file_size = build_configuration_file
                 .metadata()
-                .map_err(|_| ProjectOpenError::InvalidProjectPath)?
+                .map_err(ProjectOpenError::InvalidProjectPath)?
                 .len() as usize;
             let mut build_configuration_binary_content = vec![0; build_configuration_file_size];
 
             build_configuration_file
                 .read(&mut build_configuration_binary_content)
-                .map_err(|_| ProjectOpenError::InvalidProjectPath)?;
+                .map_err(ProjectOpenError::InvalidProjectPath)?;
 
             let build_configuration_content =
-                String::from_utf8(build_configuration_binary_content.clone())
-                    .map_err(|_| ProjectOpenError::InvalidProjectPath)?;
+                String::from_utf8(build_configuration_binary_content.clone()).map_err(|err| {
+                    ProjectOpenError::InvalidProjectPath(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        err.to_string(),
+                    ))
+                })?;
             let build_configuration_hash = blake3::hash(&build_configuration_binary_content);
 
             (build_configuration_content, build_configuration_hash)
         };
 
         let build_configuration =
-            toml::from_str::<BuildConfiguration>(&build_configuration_content)
-                .map_err(|_| ProjectOpenError::InvalidBuildConfiguration)?;
+            toml::from_str::<BuildConfiguration>(&build_configuration_content).map_err(|err| {
+                ProjectOpenError::InvalidBuildConfiguration(BuildConfigurationError::SyntaxError(
+                    err.to_string(),
+                ))
+            })?;
+
+        if !NAME_REGEX.is_match(&build_configuration.project.name) {
+            return Err(ProjectOpenError::InvalidBuildConfiguration(
+                BuildConfigurationError::InvalidName,
+            ));
+        }
 
         let hashes = fs::read_to_string(Path::new(&base_path).join(EZ_HASHES_FILE))
             .map(|hashes_content| {
@@ -145,11 +164,19 @@ impl Project {
                                         .to_string_lossy()
                                         .into_owned()
                                 })
-                                .map_err(|_| ProjectOpenError::IncorrectSource(source.clone()))
+                                .map_err(|_| {
+                                    ProjectOpenError::InvalidBuildConfiguration(
+                                        BuildConfigurationError::IncorrectSource(source.clone()),
+                                    )
+                                })
                             })
                             .collect::<Result<Vec<_>, _>>()
                     })
-                    .map_err(|err| ProjectOpenError::IncorrectWildcard(String::from(err.msg)))
+                    .map_err(|err| {
+                        ProjectOpenError::InvalidBuildConfiguration(
+                            BuildConfigurationError::IncorrectWildcard(String::from(err.msg)),
+                        )
+                    })
             })
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
@@ -157,10 +184,12 @@ impl Project {
             .map(|source| {
                 let path = base_path.join(&source);
 
-                if path.exists() && path.is_file() && !path.is_symlink() {
+                if path.exists() && path.is_file() && path.is_relative() && !path.is_symlink() {
                     Ok(source)
                 } else {
-                    Err(ProjectOpenError::IncorrectSource(source))
+                    Err(ProjectOpenError::InvalidBuildConfiguration(
+                        BuildConfigurationError::IncorrectSource(source),
+                    ))
                 }
             })
             .collect::<Result<Vec<String>, _>>()?;
@@ -180,7 +209,18 @@ impl Project {
                     })
                     .flat_map(|dependency_project| dependency_project.includes.clone().into_iter()),
             )
-            .collect::<Vec<_>>();
+            .map(|include| {
+                let path = Path::new(&include);
+
+                if path.exists() && path.is_dir() && path.is_relative() && !path.is_symlink() {
+                    Ok(include)
+                } else {
+                    Err(ProjectOpenError::InvalidBuildConfiguration(
+                        BuildConfigurationError::IncorrectInclude(include),
+                    ))
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Project {
             base_path: PathBuf::from(path.as_ref()),
@@ -222,7 +262,9 @@ impl Project {
 
         println!("Running {}", self.name);
 
-        command.status().unwrap();
+        command
+            .status()
+            .map_err(|_| ProjectRunError::BuiltExecutableIsMissing)?;
 
         Ok(())
     }
@@ -231,9 +273,12 @@ impl Project {
         &self,
         ez_configuration: &EzConfiguration,
     ) -> Result<(), ProjectBuildError> {
-        let gcc = GCC::locate(ez_configuration).ok_or(ProjectBuildError::CompilerNotFound)?;
-        let gpp = GPP::locate(ez_configuration).ok_or(ProjectBuildError::CompilerNotFound)?;
-        let ar = Ar::locate(ez_configuration).ok_or(ProjectBuildError::ArchiverNotFound)?;
+        let gcc = GCC::locate(ez_configuration)
+            .ok_or(ProjectBuildError::ToolNotFound(Tool::CCompiler))?;
+        let gpp = GPP::locate(ez_configuration)
+            .ok_or(ProjectBuildError::ToolNotFound(Tool::CppCompiler))?;
+        let ar =
+            Ar::locate(ez_configuration).ok_or(ProjectBuildError::ToolNotFound(Tool::Archiver))?;
 
         self.build_dependencies(ez_configuration)?;
 
@@ -243,12 +288,12 @@ impl Project {
             println!("Building {}", self.name);
 
             self.create_ez_directories()
-                .map_err(ProjectBuildError::IOError)?;
+                .map_err(ProjectBuildError::FailedToCreateEzDirectories)?;
 
             self.build_source_code(sources_to_compile, &gcc, &gpp, &ar)?;
 
             self.copy_artifacts_to_build_directory()
-                .map_err(ProjectBuildError::IOError)?;
+                .map_err(ProjectBuildError::FailedToCopyArtifacts)?;
 
             println!("Built {}", self.name);
         }
@@ -305,9 +350,9 @@ impl Project {
             String::from(BUILD_CONFIGURATION_FILE),
             hash_file(
                 &File::open(self.base_path.join(BUILD_CONFIGURATION_FILE))
-                    .map_err(ProjectBuildError::IOError)?,
+                    .map_err(ProjectBuildError::FailedToOpenFile)?,
             )
-            .map_err(ProjectBuildError::IOError)?,
+            .map_err(ProjectBuildError::FailedToOpenFile)?,
         );
 
         for source in &sources_to_compile {
@@ -327,7 +372,7 @@ impl Project {
         .unwrap();
 
         fs::write(self.base_path.join(EZ_HASHES_FILE), &hashes_content)
-            .map_err(ProjectBuildError::IOError)?;
+            .map_err(ProjectBuildError::FailedToSaveHashes)?;
 
         let mut object_files = self
             .sources
@@ -410,7 +455,7 @@ impl Project {
                                     &libraries,
                                     &library_search_paths,
                                 )
-                                .map_err(ProjectBuildError::LinkerError)?;
+                                .map_err(ProjectBuildError::LinkageError)?;
                             }
                             Language::CPP => {
                                 gpp.link_object_files(
@@ -421,7 +466,7 @@ impl Project {
                                     &libraries,
                                     &library_search_paths,
                                 )
-                                .map_err(ProjectBuildError::LinkerError)?;
+                                .map_err(ProjectBuildError::LinkageError)?;
                             }
                         }
 
@@ -440,7 +485,7 @@ impl Project {
                                     &libraries,
                                     &library_search_paths,
                                 )
-                                .map_err(ProjectBuildError::LinkerError)?;
+                                .map_err(ProjectBuildError::LinkageError)?;
                             }
                             Language::CPP => {
                                 gpp.link_object_files(
@@ -451,7 +496,7 @@ impl Project {
                                     &libraries,
                                     &library_search_paths,
                                 )
-                                .map_err(ProjectBuildError::LinkerError)?;
+                                .map_err(ProjectBuildError::LinkageError)?;
                             }
                         }
 
@@ -464,7 +509,7 @@ impl Project {
                 println!("Generating static library");
 
                 ar.archive_object_files(&object_files, &absolute_output_file_path)
-                    .map_err(ProjectBuildError::ArchiverError)?;
+                    .map_err(ProjectBuildError::ArchivalError)?;
 
                 println!("Generated static library");
             }
@@ -490,8 +535,8 @@ impl Project {
 
         current_hashes.insert(
             String::from(source),
-            hash_file(&File::open(&absolute_source_file_path).map_err(ProjectBuildError::IOError)?)
-                .map_err(ProjectBuildError::IOError)?,
+            hash_file(&File::open(&absolute_source_file_path).map_err(ProjectBuildError::FailedToOpenFile)?)
+                .map_err(ProjectBuildError::FailedToOpenFile)?,
         );
 
         match self.language {
@@ -525,7 +570,7 @@ impl Project {
                     &additional_pre_arguments,
                     &additional_post_arguments,
                 )
-                .map_err(ProjectBuildError::CompilerError)?;
+                .map_err(ProjectBuildError::CompilationError)?;
             }
             Language::CPP => {
                 let standard = self
@@ -557,7 +602,7 @@ impl Project {
                     &additional_pre_arguments,
                     &additional_post_arguments,
                 )
-                .map_err(ProjectBuildError::CompilerError)?;
+                .map_err(ProjectBuildError::CompilationError)?;
             }
         }
 
@@ -647,39 +692,62 @@ fn hash_file(file: &File) -> Result<Hash, io::Error> {
 #[derive(Error, Debug)]
 pub(crate) enum ProjectOpenError {
     #[error("specificed path doesn't contain ez.toml")]
-    InvalidProjectPath,
-    #[error("ez.toml is invalid")]
-    InvalidBuildConfiguration,
-    #[error("found incorrect wildcard: {0}")]
+    InvalidProjectPath(io::Error),
+    #[error("the project's build configuration is invalid: {0:?}")]
+    InvalidBuildConfiguration(BuildConfigurationError),
+}
+
+#[derive(Error, Debug)]
+pub(crate) enum BuildConfigurationError {
+    #[error("found a syntax error: {0}")]
+    SyntaxError(String),
+    #[error("the project's name contains invalid characters")]
+    InvalidName,
+    #[error("found an incorrect wildcard: {0}")]
     IncorrectWildcard(String),
-    #[error("found incorrect source: {0}")]
+    #[error("found an incorrect source: {0}")]
     IncorrectSource(String),
+    #[error("found an incorrect include: {0}")]
+    IncorrectInclude(String),
 }
 
 #[derive(Error, Debug)]
 pub(crate) enum ProjectBuildError {
-    #[error("failed to locate compiler")]
-    CompilerNotFound,
-    #[error("failed to locate archiver")]
-    ArchiverNotFound,
-    #[error("io error occurred: {0:?}")]
-    IOError(io::Error),
-    #[error("dependency must be static or dynamic library")]
+    #[error("failed to locate a {0:?}")]
+    ToolNotFound(Tool),
+    #[error("failed to create ez directories: {0:?}")]
+    FailedToCreateEzDirectories(io::Error),
+    #[error("failed to copy artifacts: {0:?}")]
+    FailedToCopyArtifacts(io::Error),
+    #[error("failed to open a file: {0:?}")]
+    FailedToOpenFile(io::Error),
+    #[error("failed to save hashes: {0:?}")]
+    FailedToSaveHashes(io::Error),
+    #[error("dependency must be a static or dynamic library")]
     DependencyMustBeLibrary,
-    #[error("failed to build dependency: {0:?}")]
+    #[error("failed to build a dependency: {0:?}")]
     FailedToBuildDependency(Box<ProjectBuildError>),
-    #[error("failed to compile project: {0}")]
-    CompilerError(String),
-    #[error("failed to link project: {0}")]
-    LinkerError(String),
-    #[error("failed to archive project: {0}")]
-    ArchiverError(String),
+    #[error("failed to compile a project: {0}")]
+    CompilationError(String),
+    #[error("failed to link a project: {0}")]
+    LinkageError(String),
+    #[error("failed to archive a project: {0}")]
+    ArchivalError(String),
+}
+
+#[derive(Debug)]
+pub(crate) enum Tool {
+    CCompiler,
+    CppCompiler,
+    Archiver,
 }
 
 #[derive(Error, Debug)]
 pub(crate) enum ProjectRunError {
-    #[error("failed to build project: {0:?}")]
+    #[error("failed to build a project: {0:?}")]
     FailedToBuildProject(ProjectBuildError),
-    #[error("can't run project that isn't executable")]
+    #[error("can't run a project whose distribution isn't set to 'executable'")]
     CannotRunNonExecutable,
+    #[error("the project's executable is missing")]
+    BuiltExecutableIsMissing,
 }
