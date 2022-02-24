@@ -7,7 +7,6 @@ use blake3::Hash;
 use glob::glob;
 use lazy_static::lazy_static;
 use memmap::MmapOptions;
-use pathdiff::diff_paths;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use regex::Regex;
 use std::collections::HashMap;
@@ -159,7 +158,7 @@ impl Project {
                             .into_iter()
                             .map(|path| {
                                 path.map(|path| {
-                                    diff_paths(path, base_path)
+                                    relative_to(path, base_path)
                                         .unwrap()
                                         .to_string_lossy()
                                         .into_owned()
@@ -723,6 +722,30 @@ fn hash_file(file: &File) -> Result<Hash, io::Error> {
     let file_content = unsafe { MmapOptions::new().map(file)? };
 
     Ok(blake3::hash(&file_content))
+}
+
+fn relative_to(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Option<PathBuf> {
+    let from = from.as_ref();
+    let to = to.as_ref();
+
+    let from = if from.is_relative() {
+        from.canonicalize().ok()?
+    } else {
+        from.to_path_buf()
+    };
+
+    let to = if to.is_relative() {
+        to.canonicalize().ok()?
+    } else {
+        to.to_path_buf()
+    };
+
+    // TODO: Support cases where from isn't to + something
+    if !from.starts_with(&to) {
+        return None;
+    }
+
+    Some(from.components().skip(to.components().count()).collect::<PathBuf>())
 }
 
 #[derive(Error, Debug)]
