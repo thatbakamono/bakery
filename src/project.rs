@@ -143,7 +143,7 @@ impl Project {
             .into_iter()
             .map(|dependency| match dependency {
                 config::Dependency::System { name } => Ok(Dependency::System { name }),
-                config::Dependency::Local { path } => Project::open(path).map(Dependency::Project),
+                config::Dependency::Local { path } => Project::open(base_path.join(path)).map(Dependency::Project),
             })
             .collect::<Result<Vec<_>, _>>()?;
 
