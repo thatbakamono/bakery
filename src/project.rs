@@ -363,13 +363,7 @@ impl Project {
 
                     match self.build_source_file(source, &gcc, &gpp) {
                         Ok(_) => {
-                            match File::open(
-                                &self
-                                    .base_path
-                                    .join(EZ_BUILD_DIRECTORY)
-                                    .join(PathBuf::from(source).file_name().unwrap())
-                                    .with_extension(OBJECT_FILE_EXTENSION),
-                            ) {
+                            match File::open(self.base_path.join(source)) {
                                 Ok(file) => match hash_file(&file) {
                                     Ok(hash) => {
                                         hashes.insert((*source).clone(), hash);
