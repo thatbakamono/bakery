@@ -18,9 +18,9 @@ use std::process::Command;
 use std::{fs, io};
 use thiserror::Error;
 
-const BUILD_CONFIGURATION_FILE: &str = "ez.toml";
-const EZ_HASHES_FILE: &str = ".ez/hashes.json";
-const EZ_BUILD_DIRECTORY: &str = ".ez/build";
+const BUILD_CONFIGURATION_FILE: &str = "bakery.toml";
+const BAKERY_HASHES_FILE: &str = ".bakery/hashes.json";
+const BAKERY_BUILD_DIRECTORY: &str = ".bakery/build";
 
 const EXECUTABLE_EXTENSION: &str = if cfg!(target_os = "windows") {
     "exe"
@@ -123,7 +123,7 @@ impl Project {
             ));
         }
 
-        let hashes = fs::read_to_string(Path::new(&base_path).join(EZ_HASHES_FILE))
+        let hashes = fs::read_to_string(Path::new(&base_path).join(BAKERY_HASHES_FILE))
             .map(|hashes_content| {
                 serde_json::from_str::<HashMap<String, String>>(&hashes_content)
                     .unwrap_or_default()
@@ -259,7 +259,7 @@ impl Project {
 
         let absolute_executable_path = self
             .base_path
-            .join(EZ_BUILD_DIRECTORY)
+            .join(BAKERY_BUILD_DIRECTORY)
             .join(&self.name)
             .with_extension(EXECUTABLE_EXTENSION);
 
@@ -292,8 +292,8 @@ impl Project {
         if !sources_to_compile.is_empty() {
             println!("Building {}", self.name);
 
-            self.create_ez_directories()
-                .map_err(ProjectBuildError::FailedToCreateEzDirectories)?;
+            self.create_directories()
+                .map_err(ProjectBuildError::FailedToCreateBakeryDirectories)?;
 
             self.build_source_code(sources_to_compile, &gcc, &gpp, &ar)?;
 
@@ -338,8 +338,8 @@ impl Project {
         Ok(())
     }
 
-    fn create_ez_directories(&self) -> Result<(), io::Error> {
-        fs::create_dir_all(self.base_path.join(EZ_BUILD_DIRECTORY))
+    fn create_directories(&self) -> Result<(), io::Error> {
+        fs::create_dir_all(self.base_path.join(BAKERY_BUILD_DIRECTORY))
     }
 
     fn build_source_code(
@@ -409,7 +409,7 @@ impl Project {
         )
         .unwrap();
 
-        fs::write(self.base_path.join(EZ_HASHES_FILE), &hashes_content)
+        fs::write(self.base_path.join(BAKERY_HASHES_FILE), &hashes_content)
             .map_err(ProjectBuildError::FailedToSaveHashes)?;
 
         let mut object_files = self
@@ -417,7 +417,7 @@ impl Project {
             .iter()
             .map(|source| {
                 self.base_path
-                    .join(EZ_BUILD_DIRECTORY)
+                    .join(BAKERY_BUILD_DIRECTORY)
                     .join(PathBuf::from(source).file_name().unwrap())
                     .with_extension(OBJECT_FILE_EXTENSION)
             })
@@ -436,7 +436,7 @@ impl Project {
             if project_dependency.distribution == Distribution::StaticLibrary {
                 object_files.push(
                     Path::new(&project_dependency.base_path)
-                        .join(EZ_BUILD_DIRECTORY)
+                        .join(BAKERY_BUILD_DIRECTORY)
                         .join(format!(
                             "{}.{}",
                             project_dependency.name, STATIC_LIBRARY_EXTENSION
@@ -447,7 +447,7 @@ impl Project {
 
         let absolute_output_file_path = self
             .base_path
-            .join(EZ_BUILD_DIRECTORY)
+            .join(BAKERY_BUILD_DIRECTORY)
             .join(&self.name)
             .with_extension(match self.distribution {
                 Distribution::Executable => EXECUTABLE_EXTENSION,
@@ -473,7 +473,7 @@ impl Project {
                     .iter()
                     .map(|project| {
                         Path::new(&project.base_path)
-                            .join(EZ_BUILD_DIRECTORY)
+                            .join(BAKERY_BUILD_DIRECTORY)
                             .to_string_lossy()
                             .into_owned()
                     })
@@ -566,7 +566,7 @@ impl Project {
 
         let absolute_output_file_path = self
             .base_path
-            .join(EZ_BUILD_DIRECTORY)
+            .join(BAKERY_BUILD_DIRECTORY)
             .join(PathBuf::from(source).file_name().unwrap())
             .with_extension(OBJECT_FILE_EXTENSION);
 
@@ -652,7 +652,7 @@ impl Project {
                         .map(|hash| {
                             let object_file_exists = fs::metadata(
                                 self.base_path
-                                    .join(EZ_BUILD_DIRECTORY)
+                                    .join(BAKERY_BUILD_DIRECTORY)
                                     .join(PathBuf::from(source).file_name().unwrap())
                                     .with_extension(OBJECT_FILE_EXTENSION),
                             )
@@ -685,7 +685,7 @@ impl Project {
             fs::copy(
                 &artifact,
                 self.base_path
-                    .join(EZ_BUILD_DIRECTORY)
+                    .join(BAKERY_BUILD_DIRECTORY)
                     .join(artifact.file_name().unwrap()),
             )?;
         }
@@ -699,7 +699,7 @@ impl Project {
         if self.distribution == Distribution::DynamicLibrary {
             artifacts.push(
                 self.base_path
-                    .join(EZ_BUILD_DIRECTORY)
+                    .join(BAKERY_BUILD_DIRECTORY)
                     .join(format!("{}.{}", self.name, DYNAMIC_LIBRARY_EXTENSION)),
             );
         }
@@ -750,7 +750,7 @@ fn relative_to(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Option<PathBuf> 
 
 #[derive(Error, Debug)]
 pub(crate) enum ProjectOpenError {
-    #[error("specificed path doesn't contain ez.toml")]
+    #[error("specificed path doesn't contain bakery.toml")]
     InvalidProjectPath(io::Error),
     #[error("the project's build configuration is invalid: {0:?}")]
     InvalidBuildConfiguration(BuildConfigurationError),
@@ -774,8 +774,8 @@ pub(crate) enum BuildConfigurationError {
 pub(crate) enum ProjectBuildError {
     #[error("failed to locate a {0:?}")]
     ToolNotFound(Tool),
-    #[error("failed to create ez directories: {0:?}")]
-    FailedToCreateEzDirectories(io::Error),
+    #[error("failed to create bakery directories: {0:?}")]
+    FailedToCreateBakeryDirectories(io::Error),
     #[error("failed to copy artifacts: {0:?}")]
     FailedToCopyArtifacts(io::Error),
     #[error("failed to open a file: {0:?}")]

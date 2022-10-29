@@ -36,7 +36,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let toolchain_configuration =
         toml::from_str::<ToolchainConfiguration>(&toolchain_configuration_content)?;
 
-    let matches = App::new("ez")
+    let matches = App::new("bakery")
         .version("0.1")
         .author("Bakamono")
         .about("Build system for C/C++")
