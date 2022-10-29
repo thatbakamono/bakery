@@ -19,8 +19,9 @@ use std::{fs, io};
 use thiserror::Error;
 
 const BUILD_CONFIGURATION_FILE: &str = "bakery.toml";
-const BAKERY_HASHES_FILE: &str = ".bakery/hashes.json";
 const BAKERY_BUILD_DIRECTORY: &str = ".bakery/build";
+const BAKERY_CACHE_DIRECTORY: &str = ".bakery/cache";
+const BAKERY_HASHES_FILE: &str = ".bakery/cache/hashes.json";
 
 const EXECUTABLE_EXTENSION: &str = if cfg!(target_os = "windows") {
     "exe"
@@ -339,7 +340,10 @@ impl Project {
     }
 
     fn create_directories(&self) -> Result<(), io::Error> {
-        fs::create_dir_all(self.base_path.join(BAKERY_BUILD_DIRECTORY))
+        fs::create_dir_all(self.base_path.join(BAKERY_BUILD_DIRECTORY))?;
+        fs::create_dir_all(self.base_path.join(BAKERY_CACHE_DIRECTORY))?;
+
+        Ok(())
     }
 
     fn build_source_code(
