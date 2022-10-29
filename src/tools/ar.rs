@@ -3,7 +3,7 @@ use std::{
     process::Command,
 };
 
-use crate::config::EzConfiguration;
+use crate::config::ToolchainConfiguration;
 
 pub(crate) struct Ar {
     location: String,
@@ -14,8 +14,8 @@ impl Ar {
         Ar { location }
     }
 
-    pub(crate) fn locate(ez_configuration: &EzConfiguration) -> Option<Ar> {
-        if let Some(ref ar_location) = ez_configuration.ar_location {
+    pub(crate) fn locate(toolchain_configuration: &ToolchainConfiguration) -> Option<Ar> {
+        if let Some(ref ar_location) = toolchain_configuration.ar_location {
             Some(Ar::new(ar_location.clone()))
         } else if cfg!(target_os = "windows") {
             Some(Ar::new(

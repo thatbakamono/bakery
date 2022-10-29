@@ -1,6 +1,7 @@
 use crate::config::{
     self, BuildConfiguration, CConfiguration, CPPConfiguration, CPPStandard, CStandard,
-    Distribution, EzConfiguration, GCCConfiguration, GPPConfiguration, Language, OptimizationLevel,
+    Distribution, GCCConfiguration, GPPConfiguration, Language, OptimizationLevel,
+    ToolchainConfiguration,
 };
 use crate::tools::{Ar, GCC, GPP};
 use blake3::Hash;
@@ -143,7 +144,9 @@ impl Project {
             .into_iter()
             .map(|dependency| match dependency {
                 config::Dependency::System { name } => Ok(Dependency::System { name }),
-                config::Dependency::Local { path } => Project::open(base_path.join(path)).map(Dependency::Project),
+                config::Dependency::Local { path } => {
+                    Project::open(base_path.join(path)).map(Dependency::Project)
+                }
             })
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -243,12 +246,15 @@ impl Project {
         })
     }
 
-    pub(crate) fn run(&self, ez_configuration: &EzConfiguration) -> Result<(), ProjectRunError> {
+    pub(crate) fn run(
+        &self,
+        toolchain_configuration: &ToolchainConfiguration,
+    ) -> Result<(), ProjectRunError> {
         if self.distribution != Distribution::Executable {
             return Err(ProjectRunError::CannotRunNonExecutable);
         }
 
-        self.build(ez_configuration)
+        self.build(toolchain_configuration)
             .map_err(ProjectRunError::FailedToBuildProject)?;
 
         let absolute_executable_path = self
@@ -270,16 +276,16 @@ impl Project {
 
     pub(crate) fn build(
         &self,
-        ez_configuration: &EzConfiguration,
+        toolchain_configuration: &ToolchainConfiguration,
     ) -> Result<(), ProjectBuildError> {
-        let gcc = GCC::locate(ez_configuration)
+        let gcc = GCC::locate(toolchain_configuration)
             .ok_or(ProjectBuildError::ToolNotFound(Tool::CCompiler))?;
-        let gpp = GPP::locate(ez_configuration)
+        let gpp = GPP::locate(toolchain_configuration)
             .ok_or(ProjectBuildError::ToolNotFound(Tool::CppCompiler))?;
-        let ar =
-            Ar::locate(ez_configuration).ok_or(ProjectBuildError::ToolNotFound(Tool::Archiver))?;
+        let ar = Ar::locate(toolchain_configuration)
+            .ok_or(ProjectBuildError::ToolNotFound(Tool::Archiver))?;
 
-        self.build_dependencies(ez_configuration)?;
+        self.build_dependencies(toolchain_configuration)?;
 
         let sources_to_compile = self.get_sources_to_compile();
 
@@ -302,7 +308,7 @@ impl Project {
 
     fn build_dependencies(
         &self,
-        ez_configuration: &EzConfiguration,
+        toolchain_configuration: &ToolchainConfiguration,
     ) -> Result<(), ProjectBuildError> {
         let project_dependencies = self
             .dependencies
@@ -322,7 +328,7 @@ impl Project {
                 }
 
                 dependency_project
-                    .build(ez_configuration)
+                    .build(toolchain_configuration)
                     .map_err(|err| ProjectBuildError::FailedToBuildDependency(Box::new(err)))?;
             }
 
@@ -362,21 +368,17 @@ impl Project {
                     println!("Compiling {}", source);
 
                     match self.build_source_file(source, &gcc, &gpp) {
-                        Ok(_) => {
-                            match File::open(self.base_path.join(source)) {
-                                Ok(file) => match hash_file(&file) {
-                                    Ok(hash) => {
-                                        hashes.insert((*source).clone(), hash);
+                        Ok(_) => match File::open(self.base_path.join(source)) {
+                            Ok(file) => match hash_file(&file) {
+                                Ok(hash) => {
+                                    hashes.insert((*source).clone(), hash);
 
-                                        println!("Compiled {}", source);
-                                    }
-                                    Err(err) => {
-                                        errors.push(SourceFileBuildError::FailedToHash(err))
-                                    }
-                                },
+                                    println!("Compiled {}", source);
+                                }
                                 Err(err) => errors.push(SourceFileBuildError::FailedToHash(err)),
-                            }
-                        }
+                            },
+                            Err(err) => errors.push(SourceFileBuildError::FailedToHash(err)),
+                        },
                         Err(err) => errors.push(err),
                     }
 
@@ -739,7 +741,11 @@ fn relative_to(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Option<PathBuf> 
         return None;
     }
 
-    Some(from.components().skip(to.components().count()).collect::<PathBuf>())
+    Some(
+        from.components()
+            .skip(to.components().count())
+            .collect::<PathBuf>(),
+    )
 }
 
 #[derive(Error, Debug)]

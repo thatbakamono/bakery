@@ -3,7 +3,7 @@ use std::{
     process::Command,
 };
 
-use crate::config::{CStandard, Distribution, EzConfiguration, OptimizationLevel};
+use crate::config::{CStandard, Distribution, OptimizationLevel, ToolchainConfiguration};
 
 pub(crate) struct GCC {
     location: String,
@@ -14,8 +14,8 @@ impl GCC {
         GCC { location }
     }
 
-    pub(crate) fn locate(ez_configuration: &EzConfiguration) -> Option<GCC> {
-        if let Some(ref gcc_location) = ez_configuration.gcc_location {
+    pub(crate) fn locate(toolchain_configuration: &ToolchainConfiguration) -> Option<GCC> {
+        if let Some(ref gcc_location) = toolchain_configuration.gcc_location {
             Some(GCC::new(gcc_location.clone()))
         } else if cfg!(target_os = "windows") {
             Some(GCC::new(
