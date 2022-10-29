@@ -1,9 +1,12 @@
-use crate::config::{
-    self, BuildConfiguration, CConfiguration, CPPConfiguration, CPPStandard, CStandard,
-    Distribution, GCCConfiguration, GPPConfiguration, Language, OptimizationLevel,
-    ToolchainConfiguration,
-};
 use crate::tools::{Ar, GCC, GPP};
+use crate::{
+    config::{
+        self, BuildConfiguration, CConfiguration, CPPConfiguration, CPPStandard, CStandard,
+        Distribution, GCCConfiguration, GPPConfiguration, Language, OptimizationLevel,
+        ToolchainConfiguration,
+    },
+    PathExtension,
+};
 use blake3::Hash;
 use glob::glob;
 use lazy_static::lazy_static;
@@ -145,9 +148,8 @@ impl Project {
             .into_iter()
             .map(|dependency| match dependency {
                 config::Dependency::System { name } => Ok(Dependency::System { name }),
-                config::Dependency::Local { path } => {
-                    Project::open(base_path.join(path)).map(|project| Dependency::Project(Box::new(project)))
-                }
+                config::Dependency::Local { path } => Project::open(base_path.join(path))
+                    .map(|project| Dependency::Project(Box::new(project))),
             })
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -162,7 +164,7 @@ impl Project {
                             .into_iter()
                             .map(|path| {
                                 path.map(|path| {
-                                    relative_to(path, base_path)
+                                    path.relative_to(base_path)
                                         .unwrap()
                                         .to_string_lossy()
                                         .into_owned()
@@ -722,34 +724,6 @@ fn hash_file(file: &File) -> Result<Hash, io::Error> {
     let file_content = unsafe { MmapOptions::new().map(file)? };
 
     Ok(blake3::hash(&file_content))
-}
-
-fn relative_to(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Option<PathBuf> {
-    let from = from.as_ref();
-    let to = to.as_ref();
-
-    let from = if from.is_relative() {
-        from.canonicalize().ok()?
-    } else {
-        from.to_path_buf()
-    };
-
-    let to = if to.is_relative() {
-        to.canonicalize().ok()?
-    } else {
-        to.to_path_buf()
-    };
-
-    // TODO: Support cases where from isn't to + something
-    if !from.starts_with(&to) {
-        return None;
-    }
-
-    Some(
-        from.components()
-            .skip(to.components().count())
-            .collect::<PathBuf>(),
-    )
 }
 
 #[derive(Error, Debug)]

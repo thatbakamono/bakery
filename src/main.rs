@@ -1,7 +1,9 @@
 mod config;
+mod extensions;
 mod project;
 mod tools;
 
+pub(crate) use extensions::*;
 pub(crate) use project::*;
 
 use clap::{App, SubCommand};
