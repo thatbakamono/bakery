@@ -76,7 +76,7 @@ pub(crate) struct Project {
 
 pub(crate) enum Dependency {
     System { name: String },
-    Project(Project),
+    Project(Box<Project>),
 }
 
 impl Project {
@@ -145,7 +145,7 @@ impl Project {
             .map(|dependency| match dependency {
                 config::Dependency::System { name } => Ok(Dependency::System { name }),
                 config::Dependency::Local { path } => {
-                    Project::open(base_path.join(path)).map(Dependency::Project)
+                    Project::open(base_path.join(path)).map(|project| Dependency::Project(Box::new(project)))
                 }
             })
             .collect::<Result<Vec<_>, _>>()?;
