@@ -367,7 +367,7 @@ impl Project {
                 |(mut hashes, mut errors), source| {
                     println!("Compiling {}", source);
 
-                    match self.build_source_file(source, &gcc, &gpp) {
+                    match self.build_source_file(source, gcc, gpp) {
                         Ok(_) => match File::open(self.base_path.join(source)) {
                             Ok(file) => match hash_file(&file) {
                                 Ok(hash) => {
