@@ -4,7 +4,7 @@ mod tools;
 
 pub(crate) use project::*;
 
-use clap::{App, SubCommand};
+use clap::Command;
 use config::EzConfiguration;
 use std::{
     env,
@@ -35,12 +35,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     let ez_configuration_content = fs::read_to_string(&ez_configuration_path)?;
     let ez_configuration = toml::from_str::<EzConfiguration>(&ez_configuration_content)?;
 
-    let matches = App::new("ez")
+    let matches = Command::new("ez")
         .version("0.1")
         .author("Bakamono")
         .about("Build system for C/C++")
-        .subcommand(SubCommand::with_name("build"))
-        .subcommand(SubCommand::with_name("run"))
+        .subcommand(Command::new("build"))
+        .subcommand(Command::new("run"))
         .get_matches();
 
     if matches.subcommand_matches("build").is_some() {
