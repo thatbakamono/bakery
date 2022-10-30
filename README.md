@@ -1,2 +1,2 @@
-# ez
-Easy build system
+# bakery
+Build system for C/C++

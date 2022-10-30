@@ -1,8 +1,12 @@
-use crate::config::{
-    self, BuildConfiguration, CConfiguration, CPPConfiguration, CPPStandard, CStandard,
-    Distribution, EzConfiguration, GCCConfiguration, GPPConfiguration, Language, OptimizationLevel,
-};
 use crate::tools::{Ar, GCC, GPP};
+use crate::{
+    config::{
+        self, BuildConfiguration, CConfiguration, CPPConfiguration, CPPStandard, CStandard,
+        Distribution, GCCConfiguration, GPPConfiguration, Language, OptimizationLevel,
+        ToolchainConfiguration,
+    },
+    PathExtension,
+};
 use blake3::Hash;
 use glob::glob;
 use lazy_static::lazy_static;
@@ -17,9 +21,10 @@ use std::process::Command;
 use std::{fs, io};
 use thiserror::Error;
 
-const BUILD_CONFIGURATION_FILE: &str = "ez.toml";
-const EZ_HASHES_FILE: &str = ".ez/hashes.json";
-const EZ_BUILD_DIRECTORY: &str = ".ez/build";
+const BUILD_CONFIGURATION_FILE: &str = "bakery.toml";
+const BAKERY_BUILD_DIRECTORY: &str = ".bakery/build";
+const BAKERY_CACHE_DIRECTORY: &str = ".bakery/cache";
+const BAKERY_HASHES_FILE: &str = ".bakery/cache/hashes.json";
 
 const EXECUTABLE_EXTENSION: &str = if cfg!(target_os = "windows") {
     "exe"
@@ -75,7 +80,7 @@ pub(crate) struct Project {
 
 pub(crate) enum Dependency {
     System { name: String },
-    Project(Project),
+    Project(Box<Project>),
 }
 
 impl Project {
@@ -122,7 +127,7 @@ impl Project {
             ));
         }
 
-        let hashes = fs::read_to_string(Path::new(&base_path).join(EZ_HASHES_FILE))
+        let hashes = fs::read_to_string(Path::new(&base_path).join(BAKERY_HASHES_FILE))
             .map(|hashes_content| {
                 serde_json::from_str::<HashMap<String, String>>(&hashes_content)
                     .unwrap_or_default()
@@ -143,7 +148,8 @@ impl Project {
             .into_iter()
             .map(|dependency| match dependency {
                 config::Dependency::System { name } => Ok(Dependency::System { name }),
-                config::Dependency::Local { path } => Project::open(base_path.join(path)).map(Dependency::Project),
+                config::Dependency::Local { path } => Project::open(base_path.join(path))
+                    .map(|project| Dependency::Project(Box::new(project))),
             })
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -158,7 +164,7 @@ impl Project {
                             .into_iter()
                             .map(|path| {
                                 path.map(|path| {
-                                    relative_to(path, base_path)
+                                    path.relative_to(base_path)
                                         .unwrap()
                                         .to_string_lossy()
                                         .into_owned()
@@ -243,17 +249,20 @@ impl Project {
         })
     }
 
-    pub(crate) fn run(&self, ez_configuration: &EzConfiguration) -> Result<(), ProjectRunError> {
+    pub(crate) fn run(
+        &self,
+        toolchain_configuration: &ToolchainConfiguration,
+    ) -> Result<(), ProjectRunError> {
         if self.distribution != Distribution::Executable {
             return Err(ProjectRunError::CannotRunNonExecutable);
         }
 
-        self.build(ez_configuration)
+        self.build(toolchain_configuration)
             .map_err(ProjectRunError::FailedToBuildProject)?;
 
         let absolute_executable_path = self
             .base_path
-            .join(EZ_BUILD_DIRECTORY)
+            .join(BAKERY_BUILD_DIRECTORY)
             .join(&self.name)
             .with_extension(EXECUTABLE_EXTENSION);
 
@@ -270,24 +279,24 @@ impl Project {
 
     pub(crate) fn build(
         &self,
-        ez_configuration: &EzConfiguration,
+        toolchain_configuration: &ToolchainConfiguration,
     ) -> Result<(), ProjectBuildError> {
-        let gcc = GCC::locate(ez_configuration)
+        let gcc = GCC::locate(toolchain_configuration)
             .ok_or(ProjectBuildError::ToolNotFound(Tool::CCompiler))?;
-        let gpp = GPP::locate(ez_configuration)
+        let gpp = GPP::locate(toolchain_configuration)
             .ok_or(ProjectBuildError::ToolNotFound(Tool::CppCompiler))?;
-        let ar =
-            Ar::locate(ez_configuration).ok_or(ProjectBuildError::ToolNotFound(Tool::Archiver))?;
+        let ar = Ar::locate(toolchain_configuration)
+            .ok_or(ProjectBuildError::ToolNotFound(Tool::Archiver))?;
 
-        self.build_dependencies(ez_configuration)?;
+        self.build_dependencies(toolchain_configuration)?;
 
         let sources_to_compile = self.get_sources_to_compile();
 
         if !sources_to_compile.is_empty() {
             println!("Building {}", self.name);
 
-            self.create_ez_directories()
-                .map_err(ProjectBuildError::FailedToCreateEzDirectories)?;
+            self.create_directories()
+                .map_err(ProjectBuildError::FailedToCreateBakeryDirectories)?;
 
             self.build_source_code(sources_to_compile, &gcc, &gpp, &ar)?;
 
@@ -302,7 +311,7 @@ impl Project {
 
     fn build_dependencies(
         &self,
-        ez_configuration: &EzConfiguration,
+        toolchain_configuration: &ToolchainConfiguration,
     ) -> Result<(), ProjectBuildError> {
         let project_dependencies = self
             .dependencies
@@ -322,7 +331,7 @@ impl Project {
                 }
 
                 dependency_project
-                    .build(ez_configuration)
+                    .build(toolchain_configuration)
                     .map_err(|err| ProjectBuildError::FailedToBuildDependency(Box::new(err)))?;
             }
 
@@ -332,8 +341,11 @@ impl Project {
         Ok(())
     }
 
-    fn create_ez_directories(&self) -> Result<(), io::Error> {
-        fs::create_dir_all(self.base_path.join(EZ_BUILD_DIRECTORY))
+    fn create_directories(&self) -> Result<(), io::Error> {
+        fs::create_dir_all(self.base_path.join(BAKERY_BUILD_DIRECTORY))?;
+        fs::create_dir_all(self.base_path.join(BAKERY_CACHE_DIRECTORY))?;
+
+        Ok(())
     }
 
     fn build_source_code(
@@ -361,22 +373,18 @@ impl Project {
                 |(mut hashes, mut errors), source| {
                     println!("Compiling {}", source);
 
-                    match self.build_source_file(source, &gcc, &gpp) {
-                        Ok(_) => {
-                            match File::open(self.base_path.join(source)) {
-                                Ok(file) => match hash_file(&file) {
-                                    Ok(hash) => {
-                                        hashes.insert((*source).clone(), hash);
+                    match self.build_source_file(source, gcc, gpp) {
+                        Ok(_) => match File::open(self.base_path.join(source)) {
+                            Ok(file) => match hash_file(&file) {
+                                Ok(hash) => {
+                                    hashes.insert((*source).clone(), hash);
 
-                                        println!("Compiled {}", source);
-                                    }
-                                    Err(err) => {
-                                        errors.push(SourceFileBuildError::FailedToHash(err))
-                                    }
-                                },
+                                    println!("Compiled {}", source);
+                                }
                                 Err(err) => errors.push(SourceFileBuildError::FailedToHash(err)),
-                            }
-                        }
+                            },
+                            Err(err) => errors.push(SourceFileBuildError::FailedToHash(err)),
+                        },
                         Err(err) => errors.push(err),
                     }
 
@@ -393,7 +401,7 @@ impl Project {
                 },
             );
 
-        if errors.len() > 0 {
+        if !errors.is_empty() {
             return Err(ProjectBuildError::CompilationError(errors));
         }
 
@@ -407,7 +415,7 @@ impl Project {
         )
         .unwrap();
 
-        fs::write(self.base_path.join(EZ_HASHES_FILE), &hashes_content)
+        fs::write(self.base_path.join(BAKERY_HASHES_FILE), &hashes_content)
             .map_err(ProjectBuildError::FailedToSaveHashes)?;
 
         let mut object_files = self
@@ -415,7 +423,7 @@ impl Project {
             .iter()
             .map(|source| {
                 self.base_path
-                    .join(EZ_BUILD_DIRECTORY)
+                    .join(BAKERY_BUILD_DIRECTORY)
                     .join(PathBuf::from(source).file_name().unwrap())
                     .with_extension(OBJECT_FILE_EXTENSION)
             })
@@ -434,7 +442,7 @@ impl Project {
             if project_dependency.distribution == Distribution::StaticLibrary {
                 object_files.push(
                     Path::new(&project_dependency.base_path)
-                        .join(EZ_BUILD_DIRECTORY)
+                        .join(BAKERY_BUILD_DIRECTORY)
                         .join(format!(
                             "{}.{}",
                             project_dependency.name, STATIC_LIBRARY_EXTENSION
@@ -445,7 +453,7 @@ impl Project {
 
         let absolute_output_file_path = self
             .base_path
-            .join(EZ_BUILD_DIRECTORY)
+            .join(BAKERY_BUILD_DIRECTORY)
             .join(&self.name)
             .with_extension(match self.distribution {
                 Distribution::Executable => EXECUTABLE_EXTENSION,
@@ -471,7 +479,7 @@ impl Project {
                     .iter()
                     .map(|project| {
                         Path::new(&project.base_path)
-                            .join(EZ_BUILD_DIRECTORY)
+                            .join(BAKERY_BUILD_DIRECTORY)
                             .to_string_lossy()
                             .into_owned()
                     })
@@ -564,7 +572,7 @@ impl Project {
 
         let absolute_output_file_path = self
             .base_path
-            .join(EZ_BUILD_DIRECTORY)
+            .join(BAKERY_BUILD_DIRECTORY)
             .join(PathBuf::from(source).file_name().unwrap())
             .with_extension(OBJECT_FILE_EXTENSION);
 
@@ -650,7 +658,7 @@ impl Project {
                         .map(|hash| {
                             let object_file_exists = fs::metadata(
                                 self.base_path
-                                    .join(EZ_BUILD_DIRECTORY)
+                                    .join(BAKERY_BUILD_DIRECTORY)
                                     .join(PathBuf::from(source).file_name().unwrap())
                                     .with_extension(OBJECT_FILE_EXTENSION),
                             )
@@ -683,7 +691,7 @@ impl Project {
             fs::copy(
                 &artifact,
                 self.base_path
-                    .join(EZ_BUILD_DIRECTORY)
+                    .join(BAKERY_BUILD_DIRECTORY)
                     .join(artifact.file_name().unwrap()),
             )?;
         }
@@ -697,7 +705,7 @@ impl Project {
         if self.distribution == Distribution::DynamicLibrary {
             artifacts.push(
                 self.base_path
-                    .join(EZ_BUILD_DIRECTORY)
+                    .join(BAKERY_BUILD_DIRECTORY)
                     .join(format!("{}.{}", self.name, DYNAMIC_LIBRARY_EXTENSION)),
             );
         }
@@ -718,33 +726,9 @@ fn hash_file(file: &File) -> Result<Hash, io::Error> {
     Ok(blake3::hash(&file_content))
 }
 
-fn relative_to(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Option<PathBuf> {
-    let from = from.as_ref();
-    let to = to.as_ref();
-
-    let from = if from.is_relative() {
-        from.canonicalize().ok()?
-    } else {
-        from.to_path_buf()
-    };
-
-    let to = if to.is_relative() {
-        to.canonicalize().ok()?
-    } else {
-        to.to_path_buf()
-    };
-
-    // TODO: Support cases where from isn't to + something
-    if !from.starts_with(&to) {
-        return None;
-    }
-
-    Some(from.components().skip(to.components().count()).collect::<PathBuf>())
-}
-
 #[derive(Error, Debug)]
 pub(crate) enum ProjectOpenError {
-    #[error("specificed path doesn't contain ez.toml")]
+    #[error("specificed path doesn't contain bakery.toml")]
     InvalidProjectPath(io::Error),
     #[error("the project's build configuration is invalid: {0:?}")]
     InvalidBuildConfiguration(BuildConfigurationError),
@@ -768,8 +752,8 @@ pub(crate) enum BuildConfigurationError {
 pub(crate) enum ProjectBuildError {
     #[error("failed to locate a {0:?}")]
     ToolNotFound(Tool),
-    #[error("failed to create ez directories: {0:?}")]
-    FailedToCreateEzDirectories(io::Error),
+    #[error("failed to create bakery directories: {0:?}")]
+    FailedToCreateBakeryDirectories(io::Error),
     #[error("failed to copy artifacts: {0:?}")]
     FailedToCopyArtifacts(io::Error),
     #[error("failed to open a file: {0:?}")]

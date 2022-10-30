@@ -1,11 +1,13 @@
 mod config;
+mod extensions;
 mod project;
 mod tools;
 
+pub(crate) use extensions::*;
 pub(crate) use project::*;
 
 use clap::Command;
-use config::EzConfiguration;
+use config::ToolchainConfiguration;
 use std::{
     env,
     error::Error,
@@ -14,28 +16,29 @@ use std::{
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let ez_configuration_path = {
+    let toolchain_configuration_path = {
         let mut executable_path = env::current_exe()?;
         executable_path.pop();
         executable_path.push("config.toml");
         executable_path
     };
 
-    if !ez_configuration_path.exists() {
-        let ez_configuration = EzConfiguration::default();
-        let ez_configuration_toml = toml::to_string_pretty(&ez_configuration)?;
+    if !toolchain_configuration_path.exists() {
+        let toolchain_configuration = ToolchainConfiguration::default();
+        let toolchain_configuration_toml = toml::to_string_pretty(&toolchain_configuration)?;
 
         File::options()
             .create(true)
             .write(true)
-            .open(&ez_configuration_path)?
-            .write_all(ez_configuration_toml.as_bytes())?;
+            .open(&toolchain_configuration_path)?
+            .write_all(toolchain_configuration_toml.as_bytes())?;
     }
 
-    let ez_configuration_content = fs::read_to_string(&ez_configuration_path)?;
-    let ez_configuration = toml::from_str::<EzConfiguration>(&ez_configuration_content)?;
+    let toolchain_configuration_content = fs::read_to_string(&toolchain_configuration_path)?;
+    let toolchain_configuration =
+        toml::from_str::<ToolchainConfiguration>(&toolchain_configuration_content)?;
 
-    let matches = Command::new("ez")
+    let matches = Command::new("bakery")
         .version("0.1")
         .author("Bakamono")
         .about("Build system for C/C++")
@@ -44,9 +47,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         .get_matches();
 
     if matches.subcommand_matches("build").is_some() {
-        Project::open(".")?.build(&ez_configuration)?;
+        Project::open(".")?.build(&toolchain_configuration)?;
     } else if matches.subcommand_matches("run").is_some() {
-        Project::open(".")?.run(&ez_configuration)?;
+        Project::open(".")?.run(&toolchain_configuration)?;
     }
 
     Ok(())

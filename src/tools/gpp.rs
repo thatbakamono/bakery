@@ -3,7 +3,7 @@ use std::{
     process::Command,
 };
 
-use crate::config::{CPPStandard, Distribution, EzConfiguration, OptimizationLevel};
+use crate::config::{CPPStandard, Distribution, OptimizationLevel, ToolchainConfiguration};
 
 pub(crate) struct GPP {
     location: String,
@@ -14,8 +14,8 @@ impl GPP {
         GPP { location }
     }
 
-    pub(crate) fn locate(ez_configuration: &EzConfiguration) -> Option<GPP> {
-        if let Some(ref gpp_location) = ez_configuration.gpp_location {
+    pub(crate) fn locate(toolchain_configuration: &ToolchainConfiguration) -> Option<GPP> {
+        if let Some(ref gpp_location) = toolchain_configuration.gpp_location {
             Some(GPP::new(gpp_location.clone()))
         } else if cfg!(target_os = "windows") {
             Some(GPP::new(
