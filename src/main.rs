@@ -6,7 +6,7 @@ mod tools;
 pub(crate) use extensions::*;
 pub(crate) use project::*;
 
-use clap::{App, SubCommand};
+use clap::Command;
 use config::ToolchainConfiguration;
 use std::{
     env,
@@ -38,12 +38,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     let toolchain_configuration =
         toml::from_str::<ToolchainConfiguration>(&toolchain_configuration_content)?;
 
-    let matches = App::new("bakery")
+    let matches = Command::new("bakery")
         .version("0.1")
         .author("Bakamono")
         .about("Build system for C/C++")
-        .subcommand(SubCommand::with_name("build"))
-        .subcommand(SubCommand::with_name("run"))
+        .subcommand(Command::new("build"))
+        .subcommand(Command::new("run"))
         .get_matches();
 
     if matches.subcommand_matches("build").is_some() {
