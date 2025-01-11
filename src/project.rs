@@ -10,7 +10,7 @@ use crate::{
 use blake3::Hash;
 use glob::glob;
 use lazy_static::lazy_static;
-use memmap::MmapOptions;
+use memmap2::MmapOptions;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use regex::Regex;
 use std::collections::HashMap;
