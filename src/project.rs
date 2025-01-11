@@ -89,7 +89,6 @@ pub(crate) enum Dependency {
 impl Project {
     pub(crate) fn open(path: impl AsRef<Path>) -> Result<Project, ProjectOpenError> {
         let base_path = path.as_ref();
-
         let build_configuration_file_path = base_path.join(BUILD_CONFIGURATION_FILE);
 
         let (build_configuration_content, build_configuration_hash) = {
@@ -130,105 +129,16 @@ impl Project {
             ));
         }
 
-        let hashes = fs::read_to_string(Path::new(&base_path).join(BAKERY_HASHES_FILE))
-            .map(|hashes_content| {
-                serde_json::from_str::<HashMap<String, String>>(&hashes_content)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|(key, value)| (key, Hash::from_hex(value).unwrap()))
-                    .collect::<HashMap<_, _>>()
-            })
-            .unwrap_or_default();
+        let hashes = Self::read_hashes(base_path);
 
         let has_project_configuration_changed = hashes
             .get(BUILD_CONFIGURATION_FILE)
             .map(|hash| *hash != build_configuration_hash)
             .unwrap_or_default();
 
-        let dependencies = build_configuration
-            .project
-            .dependencies
-            .into_iter()
-            .map(|dependency| match dependency {
-                config::Dependency::System { name } => Ok(Dependency::System { name }),
-                config::Dependency::Local { path } => Project::open(base_path.join(path))
-                    .map(|project| Dependency::Project(Box::new(project))),
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let sources = build_configuration
-            .project
-            .sources
-            .into_iter()
-            .flat_map(|source| {
-                glob(&base_path.join(&source).to_string_lossy())
-                    .map(|paths| {
-                        paths
-                            .into_iter()
-                            .map(|path| {
-                                path.map(|path| {
-                                    path.relative_to(base_path)
-                                        .unwrap()
-                                        .to_string_lossy()
-                                        .into_owned()
-                                })
-                                .map_err(|_| {
-                                    ProjectOpenError::InvalidBuildConfiguration(
-                                        BuildConfigurationError::IncorrectSource(source.clone()),
-                                    )
-                                })
-                            })
-                            .collect::<Result<Vec<_>, _>>()
-                    })
-                    .map_err(|err| {
-                        ProjectOpenError::InvalidBuildConfiguration(
-                            BuildConfigurationError::IncorrectWildcard(String::from(err.msg)),
-                        )
-                    })
-            })
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .flatten()
-            .map(|source| {
-                let path = base_path.join(&source);
-
-                if path.exists() && path.is_file() && path.is_relative() && !path.is_symlink() {
-                    Ok(source)
-                } else {
-                    Err(ProjectOpenError::InvalidBuildConfiguration(
-                        BuildConfigurationError::IncorrectSource(source),
-                    ))
-                }
-            })
-            .collect::<Result<Vec<String>, _>>()?;
-
-        let includes = build_configuration
-            .project
-            .includes
-            .clone()
-            .into_iter()
-            .map(|include| base_path.join(include).to_string_lossy().into_owned())
-            .chain(
-                dependencies
-                    .iter()
-                    .filter_map(|dependency| match dependency {
-                        Dependency::Project(project) => Some(project),
-                        _ => None,
-                    })
-                    .flat_map(|dependency_project| dependency_project.includes.clone().into_iter()),
-            )
-            .map(|include| {
-                let path = Path::new(&include);
-
-                if path.exists() && path.is_dir() && path.is_relative() && !path.is_symlink() {
-                    Ok(include)
-                } else {
-                    Err(ProjectOpenError::InvalidBuildConfiguration(
-                        BuildConfigurationError::IncorrectInclude(include),
-                    ))
-                }
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let dependencies = Self::resolve_dependencies(base_path, &build_configuration)?;
+        let sources = Self::resolve_sources(base_path, &build_configuration)?;
+        let includes = Self::resolve_includes(base_path, &build_configuration, &dependencies)?;
 
         Ok(Project {
             base_path: PathBuf::from(path.as_ref()),
@@ -380,12 +290,7 @@ impl Project {
             .map_err(ProjectBuildError::FailedToOpenFile)?,
         );
 
-        let c_standard = self
-            .c
-            .as_ref()
-            .and_then(|c| c.standard.as_ref().cloned())
-            .unwrap_or_else(CStandard::latest);
-
+        let c_standard = self.c_standard();
         let (c_additional_pre_arguments, c_additional_post_arguments) = self
             .gpp
             .as_ref()
@@ -396,7 +301,6 @@ impl Project {
                 )
             })
             .unwrap_or_else(|| (&EMPTY, &EMPTY));
-
         let c_compilation_settings = CCompilationSettings {
             distribution: self.distribution.clone(),
             standard: c_standard,
@@ -408,12 +312,7 @@ impl Project {
             additional_post_arguments: c_additional_post_arguments,
         };
 
-        let cpp_standard = self
-            .cpp
-            .as_ref()
-            .and_then(|cpp| cpp.standard.as_ref().cloned())
-            .unwrap_or_else(CppStandard::latest);
-
+        let cpp_standard = self.cpp_standard();
         let (cpp_additional_pre_arguments, cpp_additional_post_arguments) = self
             .gpp
             .as_ref()
@@ -424,7 +323,6 @@ impl Project {
                 )
             })
             .unwrap_or_else(|| (&EMPTY, &EMPTY));
-
         let cpp_compilation_settings = CppCompilationSettings {
             distribution: self.distribution.clone(),
             standard: cpp_standard,
@@ -483,49 +381,13 @@ impl Project {
 
         current_hashes.extend(hashes);
 
-        let hashes_content = serde_json::to_string_pretty(
-            &current_hashes
-                .into_iter()
-                .map(|(key, value)| (key, Hash::to_string(&value)))
-                .collect::<HashMap<_, _>>(),
-        )
-        .unwrap();
+        let hashes_content = Self::serialize_hashes(current_hashes);
 
         fs::write(self.base_path.join(BAKERY_HASHES_FILE), &hashes_content)
             .map_err(ProjectBuildError::FailedToSaveHashes)?;
 
-        let mut object_files = self
-            .sources
-            .iter()
-            .map(|source| {
-                self.base_path
-                    .join(BAKERY_BUILD_DIRECTORY)
-                    .join(PathBuf::from(source).file_name().unwrap())
-                    .with_extension(OBJECT_FILE_EXTENSION)
-            })
-            .collect::<Vec<_>>();
-
-        let project_dependencies = self
-            .dependencies
-            .iter()
-            .filter_map(|dependency| match dependency {
-                Dependency::Project(project) => Some(project),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-
-        for project_dependency in &project_dependencies {
-            if project_dependency.distribution == Distribution::StaticLibrary {
-                object_files.push(
-                    Path::new(&project_dependency.base_path)
-                        .join(BAKERY_BUILD_DIRECTORY)
-                        .join(format!(
-                            "{}.{}",
-                            project_dependency.name, STATIC_LIBRARY_EXTENSION
-                        )),
-                );
-            }
-        }
+        let project_dependencies = self.collect_project_dependencies();
+        let object_files = self.collect_object_files(&project_dependencies);
 
         let absolute_output_file_path = self
             .base_path
@@ -539,28 +401,9 @@ impl Project {
 
         match self.distribution {
             Distribution::Executable | Distribution::DynamicLibrary => {
-                let libraries = self
-                    .dependencies
-                    .iter()
-                    .filter_map(|dependency| match dependency {
-                        Dependency::System { name } => Some(name.clone()),
-                        Dependency::Project(project) => match project.distribution {
-                            Distribution::DynamicLibrary => Some(project.name.clone()),
-                            _ => None,
-                        },
-                    })
-                    .collect::<Vec<_>>();
-
-                let library_search_paths = project_dependencies
-                    .iter()
-                    .map(|project| {
-                        Path::new(&project.base_path)
-                            .join(BAKERY_BUILD_DIRECTORY)
-                            .to_string_lossy()
-                            .into_owned()
-                    })
-                    .collect::<Vec<_>>();
-
+                let libraries = self.collect_libraries();
+                let library_search_paths =
+                    Self::collect_library_search_paths(&project_dependencies);
                 let linking_setttings = LinkingSettings {
                     distribution: self.distribution.clone(),
                     includes: &self.includes,
@@ -748,6 +591,208 @@ impl Project {
         }
 
         artifacts
+    }
+
+    fn read_hashes(base_path: &Path) -> HashMap<String, Hash> {
+        fs::read_to_string(base_path.join(BAKERY_HASHES_FILE))
+            .map(|hashes_content| {
+                serde_json::from_str::<HashMap<String, String>>(&hashes_content)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(key, value)| (key, Hash::from_hex(value).unwrap()))
+                    .collect::<HashMap<_, _>>()
+            })
+            .unwrap_or_default()
+    }
+
+    fn resolve_dependencies(
+        base_path: &Path,
+        build_configuration: &BuildConfiguration,
+    ) -> Result<Vec<Dependency>, ProjectOpenError> {
+        build_configuration
+            .project
+            .dependencies
+            .iter()
+            .map(|dependency| match dependency {
+                config::Dependency::System { name } => {
+                    Ok(Dependency::System { name: name.clone() })
+                }
+                config::Dependency::Local { path } => Project::open(base_path.join(path))
+                    .map(|project| Dependency::Project(Box::new(project))),
+            })
+            .collect::<Result<Vec<_>, _>>()
+    }
+
+    fn resolve_sources(
+        base_path: &Path,
+        build_configuration: &BuildConfiguration,
+    ) -> Result<Vec<String>, ProjectOpenError> {
+        build_configuration
+            .project
+            .sources
+            .iter()
+            .flat_map(|source| {
+                glob(&base_path.join(source).to_string_lossy())
+                    .map(|paths| {
+                        paths
+                            .into_iter()
+                            .map(|path| {
+                                path.map(|path| {
+                                    path.relative_to(base_path)
+                                        .unwrap()
+                                        .to_string_lossy()
+                                        .into_owned()
+                                })
+                                .map_err(|_| {
+                                    ProjectOpenError::InvalidBuildConfiguration(
+                                        BuildConfigurationError::IncorrectSource(source.clone()),
+                                    )
+                                })
+                            })
+                            .collect::<Result<Vec<_>, _>>()
+                    })
+                    .map_err(|err| {
+                        ProjectOpenError::InvalidBuildConfiguration(
+                            BuildConfigurationError::IncorrectWildcard(String::from(err.msg)),
+                        )
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .map(|source| {
+                let path = base_path.join(&source);
+
+                if path.exists() && path.is_file() && path.is_relative() && !path.is_symlink() {
+                    Ok(source)
+                } else {
+                    Err(ProjectOpenError::InvalidBuildConfiguration(
+                        BuildConfigurationError::IncorrectSource(source),
+                    ))
+                }
+            })
+            .collect::<Result<Vec<String>, _>>()
+    }
+
+    fn resolve_includes(
+        base_path: &Path,
+        build_configuration: &BuildConfiguration,
+        dependencies: &[Dependency],
+    ) -> Result<Vec<String>, ProjectOpenError> {
+        build_configuration
+            .project
+            .includes
+            .clone()
+            .into_iter()
+            .map(|include| base_path.join(include).to_string_lossy().into_owned())
+            .chain(
+                dependencies
+                    .iter()
+                    .filter_map(|dependency| match dependency {
+                        Dependency::Project(project) => Some(project),
+                        _ => None,
+                    })
+                    .flat_map(|dependency_project| dependency_project.includes.clone().into_iter()),
+            )
+            .map(|include| {
+                let path = Path::new(&include);
+
+                if path.exists() && path.is_dir() && path.is_relative() && !path.is_symlink() {
+                    Ok(include)
+                } else {
+                    Err(ProjectOpenError::InvalidBuildConfiguration(
+                        BuildConfigurationError::IncorrectInclude(include),
+                    ))
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()
+    }
+
+    fn c_standard(&self) -> CStandard {
+        self.c
+            .as_ref()
+            .and_then(|c| c.standard.as_ref().cloned())
+            .unwrap_or_else(CStandard::latest)
+    }
+
+    fn cpp_standard(&self) -> CppStandard {
+        self.cpp
+            .as_ref()
+            .and_then(|cpp| cpp.standard.as_ref().cloned())
+            .unwrap_or_else(CppStandard::latest)
+    }
+
+    fn collect_project_dependencies(&self) -> Vec<&Project> {
+        self.dependencies
+            .iter()
+            .filter_map(|dependency| match dependency {
+                Dependency::Project(project) => Some(project.as_ref()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    }
+
+    fn collect_libraries(&self) -> Vec<String> {
+        self.dependencies
+            .iter()
+            .filter_map(|dependency| match dependency {
+                Dependency::System { name } => Some(name.clone()),
+                Dependency::Project(project) => match project.distribution {
+                    Distribution::DynamicLibrary => Some(project.name.clone()),
+                    _ => None,
+                },
+            })
+            .collect::<Vec<_>>()
+    }
+
+    fn collect_library_search_paths(project_dependencies: &[&Project]) -> Vec<String> {
+        project_dependencies
+            .iter()
+            .map(|project| {
+                Path::new(&project.base_path)
+                    .join(BAKERY_BUILD_DIRECTORY)
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect::<Vec<_>>()
+    }
+
+    fn collect_object_files(&self, project_dependencies: &[&Project]) -> Vec<PathBuf> {
+        let mut object_files = self
+            .sources
+            .iter()
+            .map(|source| {
+                self.base_path
+                    .join(BAKERY_BUILD_DIRECTORY)
+                    .join(PathBuf::from(source).file_name().unwrap())
+                    .with_extension(OBJECT_FILE_EXTENSION)
+            })
+            .collect::<Vec<_>>();
+
+        for project_dependency in project_dependencies {
+            if project_dependency.distribution == Distribution::StaticLibrary {
+                object_files.push(
+                    Path::new(&project_dependency.base_path)
+                        .join(BAKERY_BUILD_DIRECTORY)
+                        .join(format!(
+                            "{}.{}",
+                            project_dependency.name, STATIC_LIBRARY_EXTENSION
+                        )),
+                );
+            }
+        }
+
+        object_files
+    }
+
+    fn serialize_hashes(hashes: HashMap<String, Hash>) -> String {
+        serde_json::to_string_pretty(
+            &hashes
+                .into_iter()
+                .map(|(key, value)| (key, Hash::to_string(&value)))
+                .collect::<HashMap<_, _>>(),
+        )
+        .unwrap()
     }
 }
 
