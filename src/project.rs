@@ -1,4 +1,7 @@
-use crate::tools::{Ar, Gcc, Gpp};
+use crate::tools::{
+    Archiver, CCompilationSettings, CCompiler, CppCompilationSettings, CppCompiler,
+    GccFlavorArchiver, GccFlavorCCompiler, GccFlavorCppCompiler, LinkingSettings,
+};
 use crate::{
     config::{
         self, BuildConfiguration, CConfiguration, CStandard, CppConfiguration, CppStandard,
@@ -284,17 +287,17 @@ impl Project {
         let gcc = toolchain_configuration
             .gcc_location
             .as_ref()
-            .map(|gcc_location| Gcc::new(gcc_location.clone()))
+            .map(|gcc_location| GccFlavorCCompiler::new(gcc_location.clone()))
             .ok_or(ProjectBuildError::ToolNotFound(Tool::CCompiler))?;
         let gpp = toolchain_configuration
             .gpp_location
             .as_ref()
-            .map(|gpp_location| Gpp::new(gpp_location.clone()))
+            .map(|gpp_location| GccFlavorCppCompiler::new(gpp_location.clone()))
             .ok_or(ProjectBuildError::ToolNotFound(Tool::CppCompiler))?;
         let ar = toolchain_configuration
             .ar_location
             .as_ref()
-            .map(|ar_location| Ar::new(ar_location.clone()))
+            .map(|ar_location| GccFlavorArchiver::new(ar_location.clone()))
             .ok_or(ProjectBuildError::ToolNotFound(Tool::Archiver))?;
 
         self.build_dependencies(toolchain_configuration)?;
@@ -359,11 +362,13 @@ impl Project {
 
     fn build_source_code(
         &self,
-        sources_to_compile: Vec<&String>,
-        gcc: &Gcc,
-        gpp: &Gpp,
-        ar: &Ar,
+        sources: Vec<&String>,
+        c_compiler: &dyn CCompiler,
+        cpp_compiler: &dyn CppCompiler,
+        archiver: &dyn Archiver,
     ) -> Result<(), ProjectBuildError> {
+        static EMPTY: Vec<String> = vec![];
+
         let mut current_hashes = HashMap::new();
 
         current_hashes.insert(
@@ -375,14 +380,76 @@ impl Project {
             .map_err(ProjectBuildError::FailedToOpenFile)?,
         );
 
-        let (hashes, errors) = sources_to_compile
+        let c_standard = self
+            .c
+            .as_ref()
+            .and_then(|c| c.standard.as_ref().cloned())
+            .unwrap_or_else(CStandard::latest);
+
+        let (c_additional_pre_arguments, c_additional_post_arguments) = self
+            .gpp
+            .as_ref()
+            .map(|gcc| {
+                (
+                    &gcc.additional_pre_arguments,
+                    &gcc.additional_post_arguments,
+                )
+            })
+            .unwrap_or_else(|| (&EMPTY, &EMPTY));
+
+        let c_compilation_settings = CCompilationSettings {
+            distribution: self.distribution.clone(),
+            standard: c_standard,
+            optimization: self.optimization.clone(),
+            includes: &self.includes,
+            enable_all_warnings: self.enable_all_warnings,
+            treat_all_warnings_as_errors: self.treat_all_warnings_as_errors,
+            additional_pre_arguments: c_additional_pre_arguments,
+            additional_post_arguments: c_additional_post_arguments,
+        };
+
+        let cpp_standard = self
+            .cpp
+            .as_ref()
+            .and_then(|cpp| cpp.standard.as_ref().cloned())
+            .unwrap_or_else(CppStandard::latest);
+
+        let (cpp_additional_pre_arguments, cpp_additional_post_arguments) = self
+            .gpp
+            .as_ref()
+            .map(|gpp| {
+                (
+                    &gpp.additional_pre_arguments,
+                    &gpp.additional_post_arguments,
+                )
+            })
+            .unwrap_or_else(|| (&EMPTY, &EMPTY));
+
+        let cpp_compilation_settings = CppCompilationSettings {
+            distribution: self.distribution.clone(),
+            standard: cpp_standard,
+            optimization: self.optimization.clone(),
+            includes: &self.includes,
+            enable_all_warnings: self.enable_all_warnings,
+            treat_all_warnings_as_errors: self.treat_all_warnings_as_errors,
+            additional_pre_arguments: cpp_additional_pre_arguments,
+            additional_post_arguments: cpp_additional_post_arguments,
+        };
+
+        let (hashes, errors) = sources
             .par_iter()
             .fold(
                 || (HashMap::new(), Vec::new()),
                 |(mut hashes, mut errors), source| {
                     println!("Compiling {}", source);
 
-                    match self.build_source_file(source, gcc, gpp) {
+                    match self.build_source_file(
+                        source,
+                        c_compiler,
+                        &c_compilation_settings,
+                        cpp_compiler,
+                        &cpp_compilation_settings,
+                    ) {
                         Ok(_) => match File::open(self.base_path.join(source)) {
                             Ok(file) => match hash_file(&file) {
                                 Ok(hash) => {
@@ -494,32 +561,35 @@ impl Project {
                     })
                     .collect::<Vec<_>>();
 
+                let linking_setttings = LinkingSettings {
+                    distribution: self.distribution.clone(),
+                    includes: &self.includes,
+                    libraries: &libraries,
+                    library_search_paths: &library_search_paths,
+                };
+
                 match self.distribution {
                     Distribution::Executable => {
                         println!("Generating executable");
 
                         match self.language {
                             Language::C => {
-                                gcc.link_object_files(
-                                    self.distribution.clone(),
-                                    &object_files,
-                                    &absolute_output_file_path,
-                                    &self.includes,
-                                    &libraries,
-                                    &library_search_paths,
-                                )
-                                .map_err(ProjectBuildError::LinkageError)?;
+                                c_compiler
+                                    .link_object_files(
+                                        &object_files,
+                                        &absolute_output_file_path,
+                                        &linking_setttings,
+                                    )
+                                    .map_err(ProjectBuildError::LinkageError)?;
                             }
                             Language::Cpp => {
-                                gpp.link_object_files(
-                                    self.distribution.clone(),
-                                    &object_files,
-                                    &absolute_output_file_path,
-                                    &self.includes,
-                                    &libraries,
-                                    &library_search_paths,
-                                )
-                                .map_err(ProjectBuildError::LinkageError)?;
+                                cpp_compiler
+                                    .link_object_files(
+                                        &object_files,
+                                        &absolute_output_file_path,
+                                        &linking_setttings,
+                                    )
+                                    .map_err(ProjectBuildError::LinkageError)?;
                             }
                         }
 
@@ -530,26 +600,22 @@ impl Project {
 
                         match self.language {
                             Language::C => {
-                                gcc.link_object_files(
-                                    self.distribution.clone(),
-                                    &object_files,
-                                    &absolute_output_file_path,
-                                    &self.includes,
-                                    &libraries,
-                                    &library_search_paths,
-                                )
-                                .map_err(ProjectBuildError::LinkageError)?;
+                                c_compiler
+                                    .link_object_files(
+                                        &object_files,
+                                        &absolute_output_file_path,
+                                        &linking_setttings,
+                                    )
+                                    .map_err(ProjectBuildError::LinkageError)?;
                             }
                             Language::Cpp => {
-                                gpp.link_object_files(
-                                    self.distribution.clone(),
-                                    &object_files,
-                                    &absolute_output_file_path,
-                                    &self.includes,
-                                    &libraries,
-                                    &library_search_paths,
-                                )
-                                .map_err(ProjectBuildError::LinkageError)?;
+                                cpp_compiler
+                                    .link_object_files(
+                                        &object_files,
+                                        &absolute_output_file_path,
+                                        &linking_setttings,
+                                    )
+                                    .map_err(ProjectBuildError::LinkageError)?;
                             }
                         }
 
@@ -561,7 +627,8 @@ impl Project {
             Distribution::StaticLibrary => {
                 println!("Generating static library");
 
-                ar.archive_object_files(&object_files, &absolute_output_file_path)
+                archiver
+                    .archive_object_files(&object_files, &absolute_output_file_path)
                     .map_err(ProjectBuildError::ArchivalError)?;
 
                 println!("Generated static library");
@@ -574,11 +641,12 @@ impl Project {
     fn build_source_file(
         &self,
         source: &str,
-        gcc: &Gcc,
-        gpp: &Gpp,
+        c_compiler: &dyn CCompiler,
+        c_compilation_settings: &CCompilationSettings,
+        cpp_compiler: &dyn CppCompiler,
+        cpp_compilation_settings: &CppCompilationSettings,
     ) -> Result<(), SourceFileBuildError> {
         let absolute_source_file_path = self.base_path.join(source);
-
         let absolute_output_file_path = self
             .base_path
             .join(BAKERY_BUILD_DIRECTORY)
@@ -587,68 +655,22 @@ impl Project {
 
         match self.language {
             Language::C => {
-                let standard = self
-                    .c
-                    .as_ref()
-                    .and_then(|c| c.standard.as_ref().cloned())
-                    .unwrap_or_else(CStandard::latest);
-
-                let (additional_pre_arguments, additional_post_arguments) = self
-                    .gcc
-                    .as_ref()
-                    .map(|gcc| {
-                        (
-                            gcc.additional_pre_arguments.clone(),
-                            gcc.additional_post_arguments.clone(),
-                        )
-                    })
-                    .unwrap_or_default();
-
-                gcc.compile_source_file(
-                    self.distribution.clone(),
-                    standard,
-                    self.optimization.clone(),
-                    &absolute_source_file_path,
-                    &absolute_output_file_path,
-                    &self.includes,
-                    self.enable_all_warnings,
-                    self.treat_all_warnings_as_errors,
-                    &additional_pre_arguments,
-                    &additional_post_arguments,
-                )
-                .map_err(SourceFileBuildError::FailedToCompile)?;
+                c_compiler
+                    .compile_source_file(
+                        &absolute_source_file_path,
+                        &absolute_output_file_path,
+                        c_compilation_settings,
+                    )
+                    .map_err(SourceFileBuildError::FailedToCompile)?;
             }
             Language::Cpp => {
-                let standard = self
-                    .cpp
-                    .as_ref()
-                    .and_then(|cpp| cpp.standard.as_ref().cloned())
-                    .unwrap_or_else(CppStandard::latest);
-
-                let (additional_pre_arguments, additional_post_arguments) = self
-                    .gpp
-                    .as_ref()
-                    .map(|gpp| {
-                        (
-                            gpp.additional_pre_arguments.clone(),
-                            gpp.additional_post_arguments.clone(),
-                        )
-                    })
-                    .unwrap_or_default();
-
-                gpp.compile_source_file(
-                    self.distribution.clone(),
-                    standard,
-                    self.optimization.clone(),
-                    &absolute_source_file_path,
-                    &absolute_output_file_path,
-                    &self.includes,
-                    self.enable_all_warnings,
-                    self.treat_all_warnings_as_errors,
-                    &additional_pre_arguments,
-                    &additional_post_arguments,
-                )
-                .map_err(SourceFileBuildError::FailedToCompile)?;
+                cpp_compiler
+                    .compile_source_file(
+                        &absolute_source_file_path,
+                        &absolute_output_file_path,
+                        cpp_compilation_settings,
+                    )
+                    .map_err(SourceFileBuildError::FailedToCompile)?;
             }
         }
 
