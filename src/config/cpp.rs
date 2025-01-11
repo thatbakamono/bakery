@@ -20,10 +20,14 @@ pub(crate) enum CPPStandard {
     Seventeen,
     #[serde(rename = "20")]
     Twenty,
+    #[serde(rename = "23")]
+    TwentyThree,
+    #[serde(rename = "26")]
+    TwentySix,
 }
 
 impl CPPStandard {
     pub(crate) fn latest() -> CPPStandard {
-        CPPStandard::Twenty
+        CPPStandard::TwentySix
     }
 }

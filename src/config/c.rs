@@ -16,10 +16,14 @@ pub(crate) enum CStandard {
     Eleven,
     #[serde(rename = "17")]
     Seventeen,
+    #[serde(rename = "20")]
+    Twenty,
+    #[serde(rename = "23")]
+    TwentyThree,
 }
 
 impl CStandard {
     pub(crate) fn latest() -> CStandard {
-        CStandard::Seventeen
+        CStandard::TwentyThree
     }
 }

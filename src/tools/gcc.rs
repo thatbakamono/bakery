@@ -64,6 +64,8 @@ impl GCC {
                 CStandard::NinetyNine => "c99",
                 CStandard::Eleven => "c11",
                 CStandard::Seventeen => "c17",
+                CStandard::Twenty => "c20",
+                CStandard::TwentyThree => "c23",
             }
         ));
 

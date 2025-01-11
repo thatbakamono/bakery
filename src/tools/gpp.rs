@@ -66,6 +66,8 @@ impl GPP {
                 CPPStandard::Fourteen => "c++14",
                 CPPStandard::Seventeen => "c++17",
                 CPPStandard::Twenty => "c++20",
+                CPPStandard::TwentyThree => "c++23",
+                CPPStandard::TwentySix => "c++26",
             }
         ));
 
