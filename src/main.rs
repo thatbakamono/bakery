@@ -29,6 +29,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         File::options()
             .create(true)
+            .truncate(true)
             .write(true)
             .open(&toolchain_configuration_path)?
             .write_all(toolchain_configuration_toml.as_bytes())?;

@@ -1,8 +1,8 @@
-use crate::tools::{Ar, GCC, GPP};
+use crate::tools::{Ar, Gcc, Gpp};
 use crate::{
     config::{
-        self, BuildConfiguration, CConfiguration, CPPConfiguration, CPPStandard, CStandard,
-        Distribution, GCCConfiguration, GPPConfiguration, Language, OptimizationLevel,
+        self, BuildConfiguration, CConfiguration, CStandard, CppConfiguration, CppStandard,
+        Distribution, GccConfiguration, GppConfiguration, Language, OptimizationLevel,
         ToolchainConfiguration,
     },
     PathExtension,
@@ -73,9 +73,9 @@ pub(crate) struct Project {
     pub(crate) has_project_configuration_changed: bool,
     pub(crate) hashes: HashMap<String, Hash>,
     pub(crate) c: Option<CConfiguration>,
-    pub(crate) cpp: Option<CPPConfiguration>,
-    pub(crate) gcc: Option<GCCConfiguration>,
-    pub(crate) gpp: Option<GPPConfiguration>,
+    pub(crate) cpp: Option<CppConfiguration>,
+    pub(crate) gcc: Option<GccConfiguration>,
+    pub(crate) gpp: Option<GppConfiguration>,
 }
 
 pub(crate) enum Dependency {
@@ -281,9 +281,9 @@ impl Project {
         &self,
         toolchain_configuration: &ToolchainConfiguration,
     ) -> Result<(), ProjectBuildError> {
-        let gcc = GCC::locate(toolchain_configuration)
+        let gcc = Gcc::locate(toolchain_configuration)
             .ok_or(ProjectBuildError::ToolNotFound(Tool::CCompiler))?;
-        let gpp = GPP::locate(toolchain_configuration)
+        let gpp = Gpp::locate(toolchain_configuration)
             .ok_or(ProjectBuildError::ToolNotFound(Tool::CppCompiler))?;
         let ar = Ar::locate(toolchain_configuration)
             .ok_or(ProjectBuildError::ToolNotFound(Tool::Archiver))?;
@@ -351,8 +351,8 @@ impl Project {
     fn build_source_code(
         &self,
         sources_to_compile: Vec<&String>,
-        gcc: &GCC,
-        gpp: &GPP,
+        gcc: &Gcc,
+        gpp: &Gpp,
         ar: &Ar,
     ) -> Result<(), ProjectBuildError> {
         let mut current_hashes = HashMap::new();
@@ -394,8 +394,8 @@ impl Project {
             .reduce(
                 || (HashMap::new(), Vec::new()),
                 |(mut hashes1, mut errors1), (hashes2, errors2)| {
-                    hashes1.extend(hashes2.into_iter());
-                    errors1.extend(errors2.into_iter());
+                    hashes1.extend(hashes2);
+                    errors1.extend(errors2);
 
                     (hashes1, errors1)
                 },
@@ -405,7 +405,7 @@ impl Project {
             return Err(ProjectBuildError::CompilationError(errors));
         }
 
-        current_hashes.extend(hashes.into_iter());
+        current_hashes.extend(hashes);
 
         let hashes_content = serde_json::to_string_pretty(
             &current_hashes
@@ -501,7 +501,7 @@ impl Project {
                                 )
                                 .map_err(ProjectBuildError::LinkageError)?;
                             }
-                            Language::CPP => {
+                            Language::Cpp => {
                                 gpp.link_object_files(
                                     self.distribution.clone(),
                                     &object_files,
@@ -531,7 +531,7 @@ impl Project {
                                 )
                                 .map_err(ProjectBuildError::LinkageError)?;
                             }
-                            Language::CPP => {
+                            Language::Cpp => {
                                 gpp.link_object_files(
                                     self.distribution.clone(),
                                     &object_files,
@@ -565,8 +565,8 @@ impl Project {
     fn build_source_file(
         &self,
         source: &str,
-        gcc: &GCC,
-        gpp: &GPP,
+        gcc: &Gcc,
+        gpp: &Gpp,
     ) -> Result<(), SourceFileBuildError> {
         let absolute_source_file_path = self.base_path.join(source);
 
@@ -609,12 +609,12 @@ impl Project {
                 )
                 .map_err(SourceFileBuildError::FailedToCompile)?;
             }
-            Language::CPP => {
+            Language::Cpp => {
                 let standard = self
                     .cpp
                     .as_ref()
                     .and_then(|cpp| cpp.standard.as_ref().cloned())
-                    .unwrap_or_else(CPPStandard::latest);
+                    .unwrap_or_else(CppStandard::latest);
 
                 let (additional_pre_arguments, additional_post_arguments) = self
                     .gpp

@@ -28,7 +28,7 @@ pub(crate) enum Language {
     #[serde(alias = "c")]
     C,
     #[serde(rename = "C++", alias = "c++")]
-    CPP,
+    Cpp,
 }
 
 #[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]

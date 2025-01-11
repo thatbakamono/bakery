@@ -2,12 +2,12 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct CPPConfiguration {
-    pub(crate) standard: Option<CPPStandard>,
+pub(crate) struct CppConfiguration {
+    pub(crate) standard: Option<CppStandard>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
-pub(crate) enum CPPStandard {
+pub(crate) enum CppStandard {
     #[serde(rename = "98")]
     NinetyEight,
     #[serde(rename = "3")]
@@ -26,8 +26,8 @@ pub(crate) enum CPPStandard {
     TwentySix,
 }
 
-impl CPPStandard {
-    pub(crate) fn latest() -> CPPStandard {
-        CPPStandard::TwentySix
+impl CppStandard {
+    pub(crate) fn latest() -> CppStandard {
+        CppStandard::TwentySix
     }
 }

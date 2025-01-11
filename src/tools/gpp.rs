@@ -3,26 +3,26 @@ use std::{
     process::Command,
 };
 
-use crate::config::{CPPStandard, Distribution, OptimizationLevel, ToolchainConfiguration};
+use crate::config::{CppStandard, Distribution, OptimizationLevel, ToolchainConfiguration};
 
-pub(crate) struct GPP {
+pub(crate) struct Gpp {
     location: String,
 }
 
-impl GPP {
-    fn new(location: String) -> GPP {
-        GPP { location }
+impl Gpp {
+    fn new(location: String) -> Gpp {
+        Gpp { location }
     }
 
-    pub(crate) fn locate(toolchain_configuration: &ToolchainConfiguration) -> Option<GPP> {
+    pub(crate) fn locate(toolchain_configuration: &ToolchainConfiguration) -> Option<Gpp> {
         if let Some(ref gpp_location) = toolchain_configuration.gpp_location {
-            Some(GPP::new(gpp_location.clone()))
+            Some(Gpp::new(gpp_location.clone()))
         } else if cfg!(target_os = "windows") {
-            Some(GPP::new(
+            Some(Gpp::new(
                 which::which("g++.exe").ok()?.to_string_lossy().into_owned(),
             ))
         } else if cfg!(target_os = "macos") || cfg!(target_os = "linux") {
-            Some(GPP::new(
+            Some(Gpp::new(
                 which::which("g++").ok()?.to_string_lossy().into_owned(),
             ))
         } else {
@@ -33,7 +33,7 @@ impl GPP {
     pub(crate) fn compile_source_file(
         &self,
         distribution: Distribution,
-        standard: CPPStandard,
+        standard: CppStandard,
         optimization: OptimizationLevel,
         source_file: &impl AsRef<Path>,
         output_file: &impl AsRef<Path>,
@@ -57,21 +57,21 @@ impl GPP {
 
         command.arg("-xc++");
 
-        command.arg(&format!(
+        command.arg(format!(
             "-std={}",
             match standard {
-                CPPStandard::NinetyEight => "c++98",
-                CPPStandard::Three => "c++3",
-                CPPStandard::Eleven => "c++11",
-                CPPStandard::Fourteen => "c++14",
-                CPPStandard::Seventeen => "c++17",
-                CPPStandard::Twenty => "c++20",
-                CPPStandard::TwentyThree => "c++23",
-                CPPStandard::TwentySix => "c++26",
+                CppStandard::NinetyEight => "c++98",
+                CppStandard::Three => "c++3",
+                CppStandard::Eleven => "c++11",
+                CppStandard::Fourteen => "c++14",
+                CppStandard::Seventeen => "c++17",
+                CppStandard::Twenty => "c++20",
+                CppStandard::TwentyThree => "c++23",
+                CppStandard::TwentySix => "c++26",
             }
         ));
 
-        command.arg(&format!(
+        command.arg(format!(
             "-O{}",
             match optimization {
                 OptimizationLevel::Zero => "0",

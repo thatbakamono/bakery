@@ -5,24 +5,24 @@ use std::{
 
 use crate::config::{CStandard, Distribution, OptimizationLevel, ToolchainConfiguration};
 
-pub(crate) struct GCC {
+pub(crate) struct Gcc {
     location: String,
 }
 
-impl GCC {
-    fn new(location: String) -> GCC {
-        GCC { location }
+impl Gcc {
+    fn new(location: String) -> Gcc {
+        Gcc { location }
     }
 
-    pub(crate) fn locate(toolchain_configuration: &ToolchainConfiguration) -> Option<GCC> {
+    pub(crate) fn locate(toolchain_configuration: &ToolchainConfiguration) -> Option<Gcc> {
         if let Some(ref gcc_location) = toolchain_configuration.gcc_location {
-            Some(GCC::new(gcc_location.clone()))
+            Some(Gcc::new(gcc_location.clone()))
         } else if cfg!(target_os = "windows") {
-            Some(GCC::new(
+            Some(Gcc::new(
                 which::which("gcc.exe").ok()?.to_string_lossy().into_owned(),
             ))
         } else if cfg!(target_os = "macos") || cfg!(target_os = "linux") {
-            Some(GCC::new(
+            Some(Gcc::new(
                 which::which("gcc").ok()?.to_string_lossy().into_owned(),
             ))
         } else {
@@ -57,7 +57,7 @@ impl GCC {
 
         command.arg("-xc");
 
-        command.arg(&format!(
+        command.arg(format!(
             "-std={}",
             match standard {
                 CStandard::EightyNine => "c89",
@@ -69,7 +69,7 @@ impl GCC {
             }
         ));
 
-        command.arg(&format!(
+        command.arg(format!(
             "-O{}",
             match optimization {
                 OptimizationLevel::Zero => "0",
