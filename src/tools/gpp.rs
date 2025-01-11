@@ -3,31 +3,15 @@ use std::{
     process::Command,
 };
 
-use crate::config::{CppStandard, Distribution, OptimizationLevel, ToolchainConfiguration};
+use crate::config::{CppStandard, Distribution, OptimizationLevel};
 
 pub(crate) struct Gpp {
     location: String,
 }
 
 impl Gpp {
-    fn new(location: String) -> Gpp {
+    pub(crate) fn new(location: String) -> Gpp {
         Gpp { location }
-    }
-
-    pub(crate) fn locate(toolchain_configuration: &ToolchainConfiguration) -> Option<Gpp> {
-        if let Some(ref gpp_location) = toolchain_configuration.gpp_location {
-            Some(Gpp::new(gpp_location.clone()))
-        } else if cfg!(target_os = "windows") {
-            Some(Gpp::new(
-                which::which("g++.exe").ok()?.to_string_lossy().into_owned(),
-            ))
-        } else if cfg!(target_os = "macos") || cfg!(target_os = "linux") {
-            Some(Gpp::new(
-                which::which("g++").ok()?.to_string_lossy().into_owned(),
-            ))
-        } else {
-            None
-        }
     }
 
     pub(crate) fn compile_source_file(

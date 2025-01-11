@@ -281,11 +281,20 @@ impl Project {
         &self,
         toolchain_configuration: &ToolchainConfiguration,
     ) -> Result<(), ProjectBuildError> {
-        let gcc = Gcc::locate(toolchain_configuration)
+        let gcc = toolchain_configuration
+            .gcc_location
+            .as_ref()
+            .map(|gcc_location| Gcc::new(gcc_location.clone()))
             .ok_or(ProjectBuildError::ToolNotFound(Tool::CCompiler))?;
-        let gpp = Gpp::locate(toolchain_configuration)
+        let gpp = toolchain_configuration
+            .gpp_location
+            .as_ref()
+            .map(|gpp_location| Gpp::new(gpp_location.clone()))
             .ok_or(ProjectBuildError::ToolNotFound(Tool::CppCompiler))?;
-        let ar = Ar::locate(toolchain_configuration)
+        let ar = toolchain_configuration
+            .ar_location
+            .as_ref()
+            .map(|ar_location| Ar::new(ar_location.clone()))
             .ok_or(ProjectBuildError::ToolNotFound(Tool::Archiver))?;
 
         self.build_dependencies(toolchain_configuration)?;

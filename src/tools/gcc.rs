@@ -3,31 +3,15 @@ use std::{
     process::Command,
 };
 
-use crate::config::{CStandard, Distribution, OptimizationLevel, ToolchainConfiguration};
+use crate::config::{CStandard, Distribution, OptimizationLevel};
 
 pub(crate) struct Gcc {
     location: String,
 }
 
 impl Gcc {
-    fn new(location: String) -> Gcc {
+    pub(crate) fn new(location: String) -> Gcc {
         Gcc { location }
-    }
-
-    pub(crate) fn locate(toolchain_configuration: &ToolchainConfiguration) -> Option<Gcc> {
-        if let Some(ref gcc_location) = toolchain_configuration.gcc_location {
-            Some(Gcc::new(gcc_location.clone()))
-        } else if cfg!(target_os = "windows") {
-            Some(Gcc::new(
-                which::which("gcc.exe").ok()?.to_string_lossy().into_owned(),
-            ))
-        } else if cfg!(target_os = "macos") || cfg!(target_os = "linux") {
-            Some(Gcc::new(
-                which::which("gcc").ok()?.to_string_lossy().into_owned(),
-            ))
-        } else {
-            None
-        }
     }
 
     pub(crate) fn compile_source_file(
