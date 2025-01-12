@@ -1,62 +1,25 @@
-use crate::tools::{
-    Archiver, CCompilationSettings, CCompiler, CppCompilationSettings, CppCompiler,
-    GccFlavorArchiver, GccFlavorCCompiler, GccFlavorCppCompiler, LinkingSettings,
-};
 use crate::{
     config::{
-        self, BuildConfiguration, CConfiguration, CStandard, CppConfiguration, CppStandard,
-        Distribution, GccConfiguration, GppConfiguration, Language, OptimizationLevel,
-        ToolchainConfiguration,
+        self, BuildConfiguration, CConfiguration, CppConfiguration, Distribution, GccConfiguration,
+        GppConfiguration, Language, OptimizationLevel,
     },
-    PathExtension,
+    PathExtension, BAKERY_HASHES_FILE, BUILD_CONFIGURATION_FILE,
 };
 use blake3::Hash;
 use glob::glob;
 use lazy_static::lazy_static;
-use memmap2::MmapOptions;
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use regex::Regex;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::{fs, io};
 use thiserror::Error;
 
-const BUILD_CONFIGURATION_FILE: &str = "bakery.toml";
-const BAKERY_BUILD_DIRECTORY: &str = ".bakery/build";
-const BAKERY_CACHE_DIRECTORY: &str = ".bakery/cache";
-const BAKERY_HASHES_FILE: &str = ".bakery/cache/hashes.json";
-
-const EXECUTABLE_EXTENSION: &str = if cfg!(target_os = "windows") {
-    "exe"
-} else if cfg!(target_os = "linux") {
-    ""
-} else {
-    unreachable!()
-};
-
-const DYNAMIC_LIBRARY_EXTENSION: &str = if cfg!(target_os = "windows") {
-    "dll"
-} else if cfg!(target_os = "linux") {
-    "so"
-} else {
-    unreachable!()
-};
-
-const STATIC_LIBRARY_EXTENSION: &str = if cfg!(target_os = "windows") {
-    "lib"
-} else if cfg!(target_os = "linux") {
-    "a"
-} else {
-    unreachable!()
-};
-
-const OBJECT_FILE_EXTENSION: &str = "o";
+pub(crate) const NAME_PATTERN: &str = "[a-zA-Z][a-zA-Z0-9]+";
 
 lazy_static! {
-    static ref NAME_REGEX: Regex = Regex::new("[a-zA-Z][a-zA-Z0-9]+").unwrap();
+    static ref NAME_REGEX: Regex = Regex::new(NAME_PATTERN).unwrap();
 }
 
 #[allow(dead_code)]
@@ -140,6 +103,16 @@ impl Project {
         let sources = Self::resolve_sources(base_path, &build_configuration)?;
         let includes = Self::resolve_includes(base_path, &build_configuration, &dependencies)?;
 
+        for dependency in &dependencies {
+            if let Dependency::Project(project) = dependency {
+                if project.distribution == Distribution::Executable {
+                    return Err(ProjectOpenError::InvalidBuildConfiguration(
+                        BuildConfigurationError::DependencyIsNotALibrary(project.name.clone()),
+                    ));
+                }
+            }
+        }
+
         Ok(Project {
             base_path: PathBuf::from(path.as_ref()),
             name: build_configuration.project.name,
@@ -160,437 +133,6 @@ impl Project {
             gcc: build_configuration.gcc,
             gpp: build_configuration.gpp,
         })
-    }
-
-    pub(crate) fn run(
-        &self,
-        toolchain_configuration: &ToolchainConfiguration,
-    ) -> Result<(), ProjectRunError> {
-        if self.distribution != Distribution::Executable {
-            return Err(ProjectRunError::CannotRunNonExecutable);
-        }
-
-        self.build(toolchain_configuration)
-            .map_err(ProjectRunError::FailedToBuildProject)?;
-
-        let absolute_executable_path = self
-            .base_path
-            .join(BAKERY_BUILD_DIRECTORY)
-            .join(&self.name)
-            .with_extension(EXECUTABLE_EXTENSION);
-
-        let mut command = Command::new(&absolute_executable_path);
-
-        println!("Running {}", self.name);
-
-        command
-            .status()
-            .map_err(|_| ProjectRunError::BuiltExecutableIsMissing)?;
-
-        Ok(())
-    }
-
-    pub(crate) fn build(
-        &self,
-        toolchain_configuration: &ToolchainConfiguration,
-    ) -> Result<(), ProjectBuildError> {
-        let gcc = toolchain_configuration
-            .gcc_location
-            .as_ref()
-            .map(|gcc_location| GccFlavorCCompiler::new(gcc_location.clone()))
-            .ok_or(ProjectBuildError::ToolNotFound(Tool::CCompiler))?;
-        let gpp = toolchain_configuration
-            .gpp_location
-            .as_ref()
-            .map(|gpp_location| GccFlavorCppCompiler::new(gpp_location.clone()))
-            .ok_or(ProjectBuildError::ToolNotFound(Tool::CppCompiler))?;
-        let ar = toolchain_configuration
-            .ar_location
-            .as_ref()
-            .map(|ar_location| GccFlavorArchiver::new(ar_location.clone()))
-            .ok_or(ProjectBuildError::ToolNotFound(Tool::Archiver))?;
-
-        self.build_dependencies(toolchain_configuration)?;
-
-        let sources_to_compile = self.get_sources_to_compile();
-
-        if !sources_to_compile.is_empty() {
-            println!("Building {}", self.name);
-
-            self.create_directories()
-                .map_err(ProjectBuildError::FailedToCreateBakeryDirectories)?;
-
-            self.build_source_code(sources_to_compile, &gcc, &gpp, &ar)?;
-
-            self.copy_artifacts_to_build_directory()
-                .map_err(ProjectBuildError::FailedToCopyArtifacts)?;
-
-            println!("Built {}", self.name);
-        }
-
-        Ok(())
-    }
-
-    fn build_dependencies(
-        &self,
-        toolchain_configuration: &ToolchainConfiguration,
-    ) -> Result<(), ProjectBuildError> {
-        let project_dependencies = self
-            .dependencies
-            .iter()
-            .filter_map(|dependency| match dependency {
-                Dependency::Project(project) => Some(project),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-
-        if !project_dependencies.is_empty() {
-            println!("Building dependencies");
-
-            for dependency_project in &project_dependencies {
-                if dependency_project.distribution == Distribution::Executable {
-                    return Err(ProjectBuildError::DependencyMustBeLibrary);
-                }
-
-                dependency_project
-                    .build(toolchain_configuration)
-                    .map_err(|err| ProjectBuildError::FailedToBuildDependency(Box::new(err)))?;
-            }
-
-            println!("Built dependencies");
-        }
-
-        Ok(())
-    }
-
-    fn create_directories(&self) -> Result<(), io::Error> {
-        fs::create_dir_all(self.base_path.join(BAKERY_BUILD_DIRECTORY))?;
-        fs::create_dir_all(self.base_path.join(BAKERY_CACHE_DIRECTORY))?;
-
-        Ok(())
-    }
-
-    fn build_source_code(
-        &self,
-        sources: Vec<&String>,
-        c_compiler: &dyn CCompiler,
-        cpp_compiler: &dyn CppCompiler,
-        archiver: &dyn Archiver,
-    ) -> Result<(), ProjectBuildError> {
-        static EMPTY: Vec<String> = vec![];
-
-        let mut current_hashes = HashMap::new();
-
-        current_hashes.insert(
-            String::from(BUILD_CONFIGURATION_FILE),
-            hash_file(
-                &File::open(self.base_path.join(BUILD_CONFIGURATION_FILE))
-                    .map_err(ProjectBuildError::FailedToOpenFile)?,
-            )
-            .map_err(ProjectBuildError::FailedToOpenFile)?,
-        );
-
-        let c_standard = self.c_standard();
-        let (c_additional_pre_arguments, c_additional_post_arguments) = self
-            .gpp
-            .as_ref()
-            .map(|gcc| {
-                (
-                    &gcc.additional_pre_arguments,
-                    &gcc.additional_post_arguments,
-                )
-            })
-            .unwrap_or_else(|| (&EMPTY, &EMPTY));
-        let c_compilation_settings = CCompilationSettings {
-            distribution: self.distribution.clone(),
-            standard: c_standard,
-            optimization: self.optimization.clone(),
-            includes: &self.includes,
-            enable_all_warnings: self.enable_all_warnings,
-            treat_all_warnings_as_errors: self.treat_all_warnings_as_errors,
-            additional_pre_arguments: c_additional_pre_arguments,
-            additional_post_arguments: c_additional_post_arguments,
-        };
-
-        let cpp_standard = self.cpp_standard();
-        let (cpp_additional_pre_arguments, cpp_additional_post_arguments) = self
-            .gpp
-            .as_ref()
-            .map(|gpp| {
-                (
-                    &gpp.additional_pre_arguments,
-                    &gpp.additional_post_arguments,
-                )
-            })
-            .unwrap_or_else(|| (&EMPTY, &EMPTY));
-        let cpp_compilation_settings = CppCompilationSettings {
-            distribution: self.distribution.clone(),
-            standard: cpp_standard,
-            optimization: self.optimization.clone(),
-            includes: &self.includes,
-            enable_all_warnings: self.enable_all_warnings,
-            treat_all_warnings_as_errors: self.treat_all_warnings_as_errors,
-            additional_pre_arguments: cpp_additional_pre_arguments,
-            additional_post_arguments: cpp_additional_post_arguments,
-        };
-
-        let (hashes, errors) = sources
-            .par_iter()
-            .fold(
-                || (HashMap::new(), Vec::new()),
-                |(mut hashes, mut errors), source| {
-                    println!("Compiling {}", source);
-
-                    match self.build_source_file(
-                        source,
-                        c_compiler,
-                        &c_compilation_settings,
-                        cpp_compiler,
-                        &cpp_compilation_settings,
-                    ) {
-                        Ok(_) => match File::open(self.base_path.join(source)) {
-                            Ok(file) => match hash_file(&file) {
-                                Ok(hash) => {
-                                    hashes.insert((*source).clone(), hash);
-
-                                    println!("Compiled {}", source);
-                                }
-                                Err(err) => errors.push(SourceFileBuildError::FailedToHash(err)),
-                            },
-                            Err(err) => errors.push(SourceFileBuildError::FailedToHash(err)),
-                        },
-                        Err(err) => errors.push(err),
-                    }
-
-                    (hashes, errors)
-                },
-            )
-            .reduce(
-                || (HashMap::new(), Vec::new()),
-                |(mut hashes1, mut errors1), (hashes2, errors2)| {
-                    hashes1.extend(hashes2);
-                    errors1.extend(errors2);
-
-                    (hashes1, errors1)
-                },
-            );
-
-        if !errors.is_empty() {
-            return Err(ProjectBuildError::CompilationError(errors));
-        }
-
-        current_hashes.extend(hashes);
-
-        let hashes_content = Self::serialize_hashes(current_hashes);
-
-        fs::write(self.base_path.join(BAKERY_HASHES_FILE), &hashes_content)
-            .map_err(ProjectBuildError::FailedToSaveHashes)?;
-
-        let project_dependencies = self.collect_project_dependencies();
-        let object_files = self.collect_object_files(&project_dependencies);
-
-        let absolute_output_file_path = self
-            .base_path
-            .join(BAKERY_BUILD_DIRECTORY)
-            .join(&self.name)
-            .with_extension(match self.distribution {
-                Distribution::Executable => EXECUTABLE_EXTENSION,
-                Distribution::DynamicLibrary => DYNAMIC_LIBRARY_EXTENSION,
-                Distribution::StaticLibrary => STATIC_LIBRARY_EXTENSION,
-            });
-
-        match self.distribution {
-            Distribution::Executable | Distribution::DynamicLibrary => {
-                let libraries = self.collect_libraries();
-                let library_search_paths =
-                    Self::collect_library_search_paths(&project_dependencies);
-                let linking_setttings = LinkingSettings {
-                    distribution: self.distribution.clone(),
-                    includes: &self.includes,
-                    libraries: &libraries,
-                    library_search_paths: &library_search_paths,
-                };
-
-                match self.distribution {
-                    Distribution::Executable => {
-                        println!("Generating executable");
-
-                        match self.language {
-                            Language::C => {
-                                c_compiler
-                                    .link_object_files(
-                                        &object_files,
-                                        &absolute_output_file_path,
-                                        &linking_setttings,
-                                    )
-                                    .map_err(ProjectBuildError::LinkageError)?;
-                            }
-                            Language::Cpp => {
-                                cpp_compiler
-                                    .link_object_files(
-                                        &object_files,
-                                        &absolute_output_file_path,
-                                        &linking_setttings,
-                                    )
-                                    .map_err(ProjectBuildError::LinkageError)?;
-                            }
-                        }
-
-                        println!("Generated executable");
-                    }
-                    Distribution::DynamicLibrary => {
-                        println!("Generating dynamic library");
-
-                        match self.language {
-                            Language::C => {
-                                c_compiler
-                                    .link_object_files(
-                                        &object_files,
-                                        &absolute_output_file_path,
-                                        &linking_setttings,
-                                    )
-                                    .map_err(ProjectBuildError::LinkageError)?;
-                            }
-                            Language::Cpp => {
-                                cpp_compiler
-                                    .link_object_files(
-                                        &object_files,
-                                        &absolute_output_file_path,
-                                        &linking_setttings,
-                                    )
-                                    .map_err(ProjectBuildError::LinkageError)?;
-                            }
-                        }
-
-                        println!("Generated dynamic library");
-                    }
-                    _ => unreachable!(),
-                }
-            }
-            Distribution::StaticLibrary => {
-                println!("Generating static library");
-
-                archiver
-                    .archive_object_files(&object_files, &absolute_output_file_path)
-                    .map_err(ProjectBuildError::ArchivalError)?;
-
-                println!("Generated static library");
-            }
-        }
-
-        Ok(())
-    }
-
-    fn build_source_file(
-        &self,
-        source: &str,
-        c_compiler: &dyn CCompiler,
-        c_compilation_settings: &CCompilationSettings,
-        cpp_compiler: &dyn CppCompiler,
-        cpp_compilation_settings: &CppCompilationSettings,
-    ) -> Result<(), SourceFileBuildError> {
-        let absolute_source_file_path = self.base_path.join(source);
-        let absolute_output_file_path = self
-            .base_path
-            .join(BAKERY_BUILD_DIRECTORY)
-            .join(PathBuf::from(source).file_name().unwrap())
-            .with_extension(OBJECT_FILE_EXTENSION);
-
-        match self.language {
-            Language::C => {
-                c_compiler
-                    .compile_source_file(
-                        &absolute_source_file_path,
-                        &absolute_output_file_path,
-                        c_compilation_settings,
-                    )
-                    .map_err(SourceFileBuildError::FailedToCompile)?;
-            }
-            Language::Cpp => {
-                cpp_compiler
-                    .compile_source_file(
-                        &absolute_source_file_path,
-                        &absolute_output_file_path,
-                        cpp_compilation_settings,
-                    )
-                    .map_err(SourceFileBuildError::FailedToCompile)?;
-            }
-        }
-
-        Ok(())
-    }
-
-    fn get_sources_to_compile(&self) -> Vec<&String> {
-        if self.has_project_configuration_changed {
-            self.sources.iter().collect::<Vec<_>>()
-        } else {
-            self.sources
-                .par_iter()
-                .filter(|source| {
-                    self.hashes
-                        .get(*source)
-                        .map(|hash| {
-                            let object_file_exists = fs::metadata(
-                                self.base_path
-                                    .join(BAKERY_BUILD_DIRECTORY)
-                                    .join(PathBuf::from(source).file_name().unwrap())
-                                    .with_extension(OBJECT_FILE_EXTENSION),
-                            )
-                            .map(|_| true)
-                            .unwrap_or(false);
-
-                            let source_file_changed = File::open(self.base_path.join(*source))
-                                .map(|file| {
-                                    let file_content =
-                                        unsafe { MmapOptions::new().map(&file).unwrap() };
-
-                                    *hash != blake3::hash(&file_content)
-                                })
-                                .unwrap_or(false);
-
-                            !object_file_exists | source_file_changed
-                        })
-                        .unwrap_or(true)
-                })
-                .collect::<Vec<_>>()
-        }
-    }
-
-    fn copy_artifacts_to_build_directory(&self) -> Result<(), io::Error> {
-        for (index, artifact) in self.get_artifacts().into_iter().enumerate() {
-            if index == 0 && self.distribution == Distribution::DynamicLibrary {
-                continue;
-            }
-
-            fs::copy(
-                &artifact,
-                self.base_path
-                    .join(BAKERY_BUILD_DIRECTORY)
-                    .join(artifact.file_name().unwrap()),
-            )?;
-        }
-
-        Ok(())
-    }
-
-    fn get_artifacts(&self) -> Vec<PathBuf> {
-        let mut artifacts = Vec::new();
-
-        if self.distribution == Distribution::DynamicLibrary {
-            artifacts.push(
-                self.base_path
-                    .join(BAKERY_BUILD_DIRECTORY)
-                    .join(format!("{}.{}", self.name, DYNAMIC_LIBRARY_EXTENSION)),
-            );
-        }
-
-        for dependency in &self.dependencies {
-            if let Dependency::Project(project) = dependency {
-                artifacts.append(&mut project.get_artifacts());
-            }
-        }
-
-        artifacts
     }
 
     fn read_hashes(base_path: &Path) -> HashMap<String, Hash> {
@@ -707,99 +249,6 @@ impl Project {
             })
             .collect::<Result<Vec<_>, _>>()
     }
-
-    fn c_standard(&self) -> CStandard {
-        self.c
-            .as_ref()
-            .and_then(|c| c.standard.as_ref().cloned())
-            .unwrap_or_else(CStandard::latest)
-    }
-
-    fn cpp_standard(&self) -> CppStandard {
-        self.cpp
-            .as_ref()
-            .and_then(|cpp| cpp.standard.as_ref().cloned())
-            .unwrap_or_else(CppStandard::latest)
-    }
-
-    fn collect_project_dependencies(&self) -> Vec<&Project> {
-        self.dependencies
-            .iter()
-            .filter_map(|dependency| match dependency {
-                Dependency::Project(project) => Some(project.as_ref()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-    }
-
-    fn collect_libraries(&self) -> Vec<String> {
-        self.dependencies
-            .iter()
-            .filter_map(|dependency| match dependency {
-                Dependency::System { name } => Some(name.clone()),
-                Dependency::Project(project) => match project.distribution {
-                    Distribution::DynamicLibrary => Some(project.name.clone()),
-                    _ => None,
-                },
-            })
-            .collect::<Vec<_>>()
-    }
-
-    fn collect_library_search_paths(project_dependencies: &[&Project]) -> Vec<String> {
-        project_dependencies
-            .iter()
-            .map(|project| {
-                Path::new(&project.base_path)
-                    .join(BAKERY_BUILD_DIRECTORY)
-                    .to_string_lossy()
-                    .into_owned()
-            })
-            .collect::<Vec<_>>()
-    }
-
-    fn collect_object_files(&self, project_dependencies: &[&Project]) -> Vec<PathBuf> {
-        let mut object_files = self
-            .sources
-            .iter()
-            .map(|source| {
-                self.base_path
-                    .join(BAKERY_BUILD_DIRECTORY)
-                    .join(PathBuf::from(source).file_name().unwrap())
-                    .with_extension(OBJECT_FILE_EXTENSION)
-            })
-            .collect::<Vec<_>>();
-
-        for project_dependency in project_dependencies {
-            if project_dependency.distribution == Distribution::StaticLibrary {
-                object_files.push(
-                    Path::new(&project_dependency.base_path)
-                        .join(BAKERY_BUILD_DIRECTORY)
-                        .join(format!(
-                            "{}.{}",
-                            project_dependency.name, STATIC_LIBRARY_EXTENSION
-                        )),
-                );
-            }
-        }
-
-        object_files
-    }
-
-    fn serialize_hashes(hashes: HashMap<String, Hash>) -> String {
-        serde_json::to_string_pretty(
-            &hashes
-                .into_iter()
-                .map(|(key, value)| (key, Hash::to_string(&value)))
-                .collect::<HashMap<_, _>>(),
-        )
-        .unwrap()
-    }
-}
-
-fn hash_file(file: &File) -> Result<Hash, io::Error> {
-    let file_content = unsafe { MmapOptions::new().map(file)? };
-
-    Ok(blake3::hash(&file_content))
 }
 
 #[derive(Error, Debug)]
@@ -822,24 +271,18 @@ pub(crate) enum BuildConfigurationError {
     IncorrectSource(String),
     #[error("found an incorrect include: {0}")]
     IncorrectInclude(String),
+    #[error("dependency {0} is not a library")]
+    DependencyIsNotALibrary(String),
 }
 
 #[derive(Error, Debug)]
 pub(crate) enum ProjectBuildError {
-    #[error("failed to locate a {0:?}")]
-    ToolNotFound(Tool),
     #[error("failed to create bakery directories: {0:?}")]
     FailedToCreateBakeryDirectories(io::Error),
-    #[error("failed to copy artifacts: {0:?}")]
-    FailedToCopyArtifacts(io::Error),
     #[error("failed to open a file: {0:?}")]
     FailedToOpenFile(io::Error),
     #[error("failed to save hashes: {0:?}")]
     FailedToSaveHashes(io::Error),
-    #[error("dependency must be a static or dynamic library")]
-    DependencyMustBeLibrary,
-    #[error("failed to build a dependency: {0:?}")]
-    FailedToBuildDependency(Box<ProjectBuildError>),
     #[error("failed to compile a project: {0:?}")]
     CompilationError(Vec<SourceFileBuildError>),
     #[error("failed to link a project: {0}")]
@@ -848,27 +291,10 @@ pub(crate) enum ProjectBuildError {
     ArchivalError(String),
 }
 
-#[derive(Debug)]
-pub(crate) enum Tool {
-    CCompiler,
-    CppCompiler,
-    Archiver,
-}
-
 #[derive(Error, Debug)]
 pub(crate) enum SourceFileBuildError {
     #[error("failed to compile a source file: {0}")]
     FailedToCompile(String),
     #[error("failed to hash a source file: {0:?}")]
     FailedToHash(io::Error),
-}
-
-#[derive(Error, Debug)]
-pub(crate) enum ProjectRunError {
-    #[error("failed to build a project: {0:?}")]
-    FailedToBuildProject(ProjectBuildError),
-    #[error("can't run a project whose distribution isn't set to 'executable'")]
-    CannotRunNonExecutable,
-    #[error("the project's executable is missing")]
-    BuiltExecutableIsMissing,
 }
